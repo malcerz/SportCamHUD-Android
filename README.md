@@ -30,19 +30,23 @@ Wymagane: JDK 17+, Android SDK 36.
   wymiana biletu na tokeny DI OAuth2, odświeżanie tokenów, tokeny szyfrowane w magazynie kluczy Androida.
   Automatyczne dopasowanie aktywności do filmu (ten sam algorytm punktacji co w Windows), wybór z listy
   przy niejednoznaczności, pamięć podręczna pobranych FIT.
+- **Telemetria GoPro (GPMF)**: czytana prosto ze ścieżki `gpmd` w pliku MP4 (bez FFmpeg). GPS (GPS9 i starszy
+  GPS5+GPSU), ISO, czas naświetlania, temperatura kamery oraz przechył liczony z akcelerometru i żyroskopu
+  (filtr komplementarny jak w TeleM, z osią, kalibracją, odwróceniem, mnożnikiem i wygładzaniem). Czas startu filmu
+  bierze się z GPS kamery, a SmartSync najpierw dopasowuje ślad GPS z FIT do śladu GPS kamery. Bez pliku FIT
+  prędkość, dystans, wysokość, kurs i mapa idą z GPS GoPro.
 - **Eksport**: film z nałożonym HUD do `Filmy/SportCamHUD`, wybór fragmentu, postęp, udostępnianie.
   Aplikację można też otworzyć przez „Udostępnij” z galerii.
 
 ## Czego nie przeniesiono
 
-- Telemetrii GoPro GPMF (ISO, ekspozycja, temperatura kamery, przechył z żyroskopu, SmartSync po śladzie GPS).
+- Telemetrii DJI i łączenia wielu plików z jednej jazdy (multifile).
 - Plików GPX.
 - Sprzętowych potoków FFmpeg (zastąpione przez Media3, który i tak używa sprzętowego kodeka telefonu).
-- Archiwum nie zawierało `telemetry_fit.py`, więc czytnik FIT napisano od nowa na oficjalnym SDK.
 
 ## Do sprawdzenia na urządzeniu
 
-Moduł `core` jest przetestowany (13 testów, w tym dekodowanie FIT, synchronizacja, dopasowanie aktywności,
+Moduł `core` jest przetestowany (21 testów, w tym dekodowanie FIT, GPMF na syntetycznym nagraniu GoPro, synchronizacja, dopasowanie aktywności,
 klient Garmin na atrapie serwera i render HUD). Modułu `app` nie dało się skompilować w środowisku, w którym
 powstał (brak dostępu do repozytorium Google Maven), dlatego przy pierwszym uruchomieniu warto sprawdzić:
 - orientację nakładki dla filmów nagranych pionowo / z rotacją w metadanych,

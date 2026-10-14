@@ -83,6 +83,14 @@ object DefaultLayout {
                 "compass_tick_degrees" to 15, "compass_major_tick_degrees" to 45,
             ),
             ind(
+                "lean_indicator", "enabled" to true, "label" to "Przechył", "x" to 90.0, "y" to 55.0, "rotation" to 0,
+                "form" to "lean", "font_size" to 1.6, "size" to 9.0, "source" to "gyro", "axis" to "y",
+                "calibration" to 0.0, "invert_axis" to false, "sensitivity" to 1.0, "max_angle" to 30.0,
+                "lean_smoothing_s" to 0.0, "graphic" to "bike", "show_reference" to true, "show_ticks" to true,
+                "track_color" to "#FFFFFF", "tick_color" to "#F6F6F6", "marker_color" to "#FFFFFF",
+                "show_value" to true, "show_label" to true, "decimals" to 0,
+            ),
+            ind(
                 "slope_text", "enabled" to false, "label" to "Nachylenie", "x" to 96.0, "y" to 60.0, "rotation" to 0,
                 "form" to "bar", "bar_style" to "slope", "font_size" to 1.25, "size" to 15.0, "thickness" to 0.6,
                 "min_val" to -15, "max_val" to 15, "ticks" to 6, "field" to Fields.SLOPE,

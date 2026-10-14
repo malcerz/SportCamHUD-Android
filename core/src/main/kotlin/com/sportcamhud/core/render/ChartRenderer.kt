@@ -18,7 +18,13 @@ object ChartRenderer {
     fun draw(ctx: RenderContext, cfg: IndicatorConfig, field: String, frame: FrameData?, value: Double?,
              formatted: String, label: String, convert: (Double) -> Double) {
         val c = ctx.canvas
-        val series = frame?.dataset?.get(field) ?: return
+        frame ?: return
+        val series = frame.dataset?.get(field) ?: frame.camera?.fields?.get(field)?.let { cam ->
+            // Camera streams are on the video clock; charts work on the absolute one.
+            val key = "camera|$field|${frame.videoStart}"
+            (ctx.caches.charts[key] as? com.sportcamhud.core.telemetry.Series)
+                ?: cam.shifted(frame.videoStart).also { ctx.caches.charts[key] = it }
+        } ?: return
         val fs = ctx.fontSize(cfg)
         val chartW = ctx.s(cfg.double("size", 30.0), ctx.width)
         var chartH = max(40f, chartW * 0.4f)

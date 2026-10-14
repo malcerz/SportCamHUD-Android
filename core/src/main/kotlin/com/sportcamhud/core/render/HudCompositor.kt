@@ -3,6 +3,7 @@ package com.sportcamhud.core.render
 import com.sportcamhud.core.layout.HudLayout
 import com.sportcamhud.core.layout.IndicatorConfig
 import com.sportcamhud.core.layout.IndicatorRegistry
+import com.sportcamhud.core.telemetry.CameraTelemetry
 import com.sportcamhud.core.telemetry.Fields
 import com.sportcamhud.core.telemetry.FrameData
 import com.sportcamhud.core.telemetry.TelemetryDataset
@@ -14,9 +15,6 @@ import kotlin.math.floor
  * indicator to its telemetry field and dispatches to the per-form renderer.
  */
 class HudCompositor(private val caches: RenderCaches = RenderCaches()) {
-
-    /** Streams that only GoPro GPMF metadata provides; hidden on Android. */
-    private val gpmfOnly = setOf("iso", "exposure", "camera_temp", "lean")
 
     fun invalidate() = caches.clear()
 
@@ -43,10 +41,12 @@ class HudCompositor(private val caches: RenderCaches = RenderCaches()) {
         val ds = frame?.dataset
         val field = IndicatorRegistry.fieldFor(cfg)
         if (field != null) {
-            if (field in gpmfOnly) return null
-            if (ds != null && !ds.has(field)) return null
+            // Hide indicators whose stream is missing (e.g. ISO without a GoPro video).
+            if (frame == null || !frame.has(field)) {
+                if (field in CameraTelemetry.INFO || ds != null) return null
+            }
         }
-        val info = field?.let { ds?.info(it) ?: Fields.INFO[it] }
+        val info = field?.let { frame?.info(it) ?: Fields.INFO[it] ?: CameraTelemetry.INFO[it] }
         val raw = field?.let { frame?.values?.get(it) }
         val value = raw?.let { convert(field, it) }
         val unit = cfg.string("unit", info?.unit ?: "")
@@ -61,7 +61,7 @@ class HudCompositor(private val caches: RenderCaches = RenderCaches()) {
         when (cfg.form) {
             "time_display" -> TimeDisplayRenderer.draw(ctx, cfg, frame)
             "map", "static_map" -> MapRenderer.draw(ctx, cfg, frame)
-            "lean" -> Unit // needs GoPro gyroscope data (GPMF)
+            "lean" -> LeanRenderer.draw(ctx, cfg, frame)
             else -> {
                 val b = bind(cfg, frame) ?: return
                 val withUnit = cfg.bool("show_units", true)
@@ -84,7 +84,11 @@ class HudCompositor(private val caches: RenderCaches = RenderCaches()) {
                         ChartRenderer.draw(ctx, cfg, field, frame, b.value, ValueFormat.format(b.value, b.decimals, b.unit, withUnit), b.label) { convert(field, it) }
                     }
                     else -> {
-                        val v = ValueFormat.format(b.value, b.decimals, b.unit, withUnit)
+                        val v = if (b.field == CameraTelemetry.EXPOSURE) {
+                            b.value?.let { Math.round(it) }?.takeIf { it > 0 }?.let { "1/$it" } ?: ""
+                        } else {
+                            ValueFormat.format(b.value, b.decimals, b.unit, withUnit)
+                        }
                         val text = if (b.label.isNotEmpty()) "${b.label}: $v" else v
                         TextRenderer.draw(ctx, cfg, text)
                     }

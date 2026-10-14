@@ -32,6 +32,9 @@ import com.sportcamhud.core.layout.HudLayout
 import com.sportcamhud.core.layout.IndicatorConfig
 import com.sportcamhud.core.render.HudCompositor
 import com.sportcamhud.core.render.MapRenderer
+import com.sportcamhud.core.gpmf.ChannelByteSource
+import com.sportcamhud.core.gpmf.GpmfParser
+import com.sportcamhud.core.telemetry.CameraTelemetry
 import com.sportcamhud.core.telemetry.FrameData
 import com.sportcamhud.core.telemetry.TelemetryDataset
 import com.sportcamhud.core.telemetry.TelemetryTimeline
@@ -60,6 +63,8 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     // ---- state ---------------------------------------------------------------
     var video by mutableStateOf<VideoInfo?>(null); private set
     var dataset by mutableStateOf<TelemetryDataset?>(null); private set
+    /** GoPro GPMF telemetry embedded in the video (GPS, ISO, shutter, temperature, IMU). */
+    var camera by mutableStateOf<CameraTelemetry?>(null); private set
     var fitSummary by mutableStateOf<FitSummary?>(null); private set
     var telemetryName by mutableStateOf<String?>(null); private set
     var autoSync by mutableStateOf<TimeSync.Result?>(null); private set
@@ -82,6 +87,17 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     var clipEndMs by mutableLongStateOf(0L)
     private var exportJob: Job? = null
 
+    /** UTC of the first video frame: from the camera's GPS when present, else the MP4 date. */
+    val videoStartUtc: Long? get() = camera?.utcStartMs ?: video?.creationTime
+
+    /** Fields an indicator can be bound to (activity file + camera). */
+    val availableFields: List<String>
+        get() = ((dataset ?: timeline?.dataset)?.fields?.keys.orEmpty() + camera?.fields?.keys.orEmpty()).distinct().sorted()
+
+    fun fieldLabel(field: String): String =
+        CameraTelemetry.INFO[field]?.takeIf { camera?.has(field) == true }?.label
+            ?: (dataset ?: timeline?.dataset)?.info(field)?.label ?: com.sportcamhud.core.telemetry.Fields.INFO[field]?.label ?: field
+
     /** Telemetry on the video clock (SmartSync + manual correction). */
     var timeline by mutableStateOf<TelemetryTimeline?>(null); private set
 
@@ -96,6 +112,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
             busy = true
             try {
                 val info = withContext(Dispatchers.IO) { VideoInfo.probe(ctx, uri) }
+                camera = withContext(Dispatchers.IO) { readCameraTelemetry(uri) }
                 video = info
                 clipStartMs = 0
                 clipEndMs = info.durationMs
@@ -103,7 +120,8 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
                 player.setMediaItem(MediaItem.fromUri(uri))
                 player.prepare()
                 rebuildTimeline()
-                status = "Wczytano film ${info.name} (${info.displayWidth}×${info.displayHeight})."
+                status = "Wczytano film ${info.name} (${info.displayWidth}×${info.displayHeight})." +
+                    (camera?.let { " " + describeCamera(it) } ?: "")
             } catch (e: Exception) {
                 status = "Nie udało się otworzyć filmu: ${e.message}"
                 return@launch
@@ -112,6 +130,25 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (dataset == null && autoGarmin && garminConnected) fetchFromGarmin()
         }
+    }
+
+    private fun readCameraTelemetry(uri: Uri): CameraTelemetry? = try {
+        ctx.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            java.io.FileInputStream(pfd.fileDescriptor).use { GpmfParser.read(ChannelByteSource(it.channel)) }
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun describeCamera(c: CameraTelemetry): String {
+        val parts = buildList {
+            if (c.hasGps) add("GPS")
+            if (c.iso != null) add("ISO")
+            if (c.exposure != null) add("migawka")
+            if (c.cameraTemp != null) add("temperatura")
+            if (c.hasImu) add("przechył")
+        }
+        return "Telemetria GoPro: ${parts.joinToString(", ")}."
     }
 
     // ---- telemetry -------------------------------------------------------------
@@ -161,17 +198,22 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun rebuildTimeline() {
         val v = video
+        val cam = camera
+        val start = videoStartUtc
         val ds = dataset
         if (ds == null || ds.start == null) {
             autoSync = null
-            timeline = v?.let { TelemetryTimeline(null, it.creationTime ?: System.currentTimeMillis(), it.durationMs) }
+            // Without a FIT file the GoPro GPS (if any) drives speed, distance, altitude and the map.
+            val camDs = if (cam != null && start != null) cam.toDataset(start) else null
+            timeline = v?.let { TelemetryTimeline(camDs, start ?: System.currentTimeMillis(), it.durationMs, camera = cam) }
             return
         }
-        val sync = TimeSync.smartOffset(ds.start!!, ds.end!!, v?.creationTime)
+        val camTrack = cam?.utcStartMs?.let { s0 -> cam.relativeTrack().map { it.copy(time = it.time + s0) } }.orEmpty()
+        val sync = TimeSync.smartOffset(ds.start!!, ds.end!!, start, ds.track, camTrack)
         autoSync = sync
         val shifted = ds.shifted(sync.offsetMs + manualOffsetMs)
-        val videoStart = v?.creationTime ?: ds.start!!
-        timeline = TelemetryTimeline(shifted, videoStart, v?.durationMs ?: (ds.end!! - ds.start!!))
+        val videoStart = start ?: ds.start!!
+        timeline = TelemetryTimeline(shifted, videoStart, v?.durationMs ?: (ds.end!! - ds.start!!), camera = cam)
     }
 
     fun frameAt(positionMs: Long): FrameData? = timeline?.frameAt(positionMs)
@@ -218,7 +260,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     /** Finds the activity recorded during the video and downloads its FIT. */
     fun fetchFromGarmin() {
         val v = video ?: run { status = "Najpierw wybierz film."; return }
-        val start = v.creationTime ?: run {
+        val start = videoStartUtc ?: run {
             status = "Film nie ma zapisanej daty nagrania — wskaż plik FIT ręcznie."
             return
         }
@@ -290,7 +332,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun addIndicator(field: String) {
-        val label = dataset?.info(field)?.label ?: field
+        val label = fieldLabel(field)
         val cfg = DefaultLayout.newIndicatorFor(field, label, layout.indicators.keys)
         updateIndicator(cfg)
         selectedKey = cfg.key

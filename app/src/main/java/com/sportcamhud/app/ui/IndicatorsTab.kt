@@ -66,6 +66,7 @@ private val BUILTIN_NAMES = mapOf(
     "track_map" to "Mapa z trasą",
     "compass" to "Kompas",
     "slope_text" to "Nachylenie",
+    "lean_indicator" to "Przechył (GoPro)",
 )
 
 private val FORM_NAMES = linkedMapOf(
@@ -89,11 +90,12 @@ fun IndicatorsTab(vm: HudViewModel) {
             Box {
                 OutlinedButton(onClick = { addMenu = true }) { Text("Dodaj wskaźnik") }
                 DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
-                    val fields = vm.dataset?.fields?.keys?.sorted()
-                        ?: listOf(Fields.SPEED, Fields.DISTANCE, Fields.ALT, Fields.HEART_RATE, Fields.CADENCE, Fields.POWER, Fields.SLOPE, Fields.HEADING)
+                    val fields = vm.availableFields.ifEmpty {
+                        listOf(Fields.SPEED, Fields.DISTANCE, Fields.ALT, Fields.HEART_RATE, Fields.CADENCE, Fields.POWER, Fields.SLOPE, Fields.HEADING)
+                    }
                     for (f in fields) {
                         DropdownMenuItem(
-                            text = { Text(vm.dataset?.info(f)?.label ?: Fields.INFO[f]?.label ?: f) },
+                            text = { Text(vm.fieldLabel(f)) },
                             onClick = { addMenu = false; vm.addIndicator(f); editing = vm.selectedKey },
                         )
                     }
@@ -162,7 +164,7 @@ private fun IndicatorEditor(
                 SliderProp("Pozycja Y", cfg.y, 0.0, 100.0) { onChange(cfg.with("y", it)) }
 
                 val form = cfg.form
-                if (form != "time_display" && form != "map") {
+                if (form != "time_display" && form != "map" && form != "lean") {
                     Text("Forma")
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         for ((f, name) in FORM_NAMES) {
@@ -236,6 +238,37 @@ private fun IndicatorEditor(
                             FilterChip(cfg.string("map_shape", "square") == "square", { onChange(cfg.with("map_shape", "square")) }, { Text("Kwadrat") })
                             FilterChip(cfg.string("map_shape", "square") == "circle", { onChange(cfg.with("map_shape", "circle")) }, { Text("Koło") })
                         }
+                    }
+                    "lean" -> {
+                        Text("Źródło danych")
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for ((src, n) in listOf("gyro" to "IMU GoPro (kąt)", "raw_gyro_z" to "Żyroskop Z [°/s]", "grade" to "Nachylenie z FIT")) {
+                                FilterChip(selected = cfg.string("source", "gyro") == src, onClick = { onChange(cfg.with("source", src)) }, label = { Text(n) })
+                            }
+                        }
+                        if (cfg.string("source", "gyro") == "gyro") {
+                            Text("Oś przechyłu")
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                for ((a, n) in listOf("y" to "Roll (Y)", "x" to "Pitch (X)", "z" to "Yaw (Z)")) {
+                                    FilterChip(selected = cfg.string("axis", "y") == a, onClick = { onChange(cfg.with("axis", a)) }, label = { Text(n) })
+                                }
+                            }
+                        }
+                        SliderProp("Kalibracja [°]", cfg.double("calibration", 0.0), -90.0, 90.0) { onChange(cfg.with("calibration", it)) }
+                        LabeledSwitch("Odwróć kierunek", cfg.bool("invert_axis", false)) { onChange(cfg.with("invert_axis", it)) }
+                        SliderProp("Mnożnik wychyłu", cfg.double("sensitivity", 1.0), 0.0, 5.0) { onChange(cfg.with("sensitivity", it)) }
+                        SliderProp("Maks. kąt [°]", cfg.double("max_angle", 30.0), 1.0, 90.0, integer = true) { onChange(cfg.with("max_angle", it)) }
+                        SliderProp("Wygładzanie [s]", cfg.double("lean_smoothing_s", 0.0), 0.0, 5.0) { onChange(cfg.with("lean_smoothing_s", it)) }
+                        Text("Grafika")
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for ((gname, n) in listOf("bike" to "Rower", "none" to "Brak")) {
+                                FilterChip(selected = cfg.string("graphic", "bike") == gname, onClick = { onChange(cfg.with("graphic", gname)) }, label = { Text(n) })
+                            }
+                        }
+                        LabeledSwitch("Linia 0°", cfg.bool("show_reference", true)) { onChange(cfg.with("show_reference", it)) }
+                        LabeledSwitch("Podziałka", cfg.bool("show_ticks", true)) { onChange(cfg.with("show_ticks", it)) }
+                        LabeledSwitch("Pokaż wartość", cfg.bool("show_value", true)) { onChange(cfg.with("show_value", it)) }
+                        ColorProp("Kolor grafiki", cfg.string("marker_color", "#FFFFFF")) { onChange(cfg.with("marker_color", it)) }
                     }
                     "text" -> {
                         LabeledSwitch("Wyśrodkuj", cfg.string("align", "left") == "center") { onChange(cfg.with("align", if (it) "center" else "left")) }

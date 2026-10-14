@@ -58,6 +58,17 @@ fun ProjectTab(vm: HudViewModel) {
                         "Data nagrania: " + (v.creationTime?.let { DATE_TIME.format(Instant.ofEpochMilli(it).atOffset(ZoneOffset.UTC)) }
                             ?: "brak w pliku"),
                     )
+                    vm.camera?.let { cam ->
+                        val parts = buildList {
+                            if (cam.hasGps) add("GPS")
+                            if (cam.iso != null) add("ISO")
+                            if (cam.exposure != null) add("migawka")
+                            if (cam.cameraTemp != null) add("temperatura")
+                            if (cam.hasImu) add("przechył (IMU)")
+                        }
+                        Text("Telemetria GoPro${cam.deviceName?.let { " ($it)" } ?: ""}: ${parts.joinToString(", ")}")
+                        cam.utcStartMs?.let { Text("Start wg GPS kamery (UTC): " + DATE_TIME.format(Instant.ofEpochMilli(it).atOffset(ZoneOffset.UTC))) }
+                    }
                 }
             }
         }
@@ -91,6 +102,7 @@ private fun SyncCard(vm: HudViewModel) {
             val sync = vm.autoSync
             Text(
                 when (sync?.method) {
+                    TimeSync.Method.GPS_TRACK -> "Dopasowano ślad GPS z FIT do GPS kamery GoPro."
                     TimeSync.Method.ABSOLUTE_TIME -> "Czas filmu mieści się w aktywności — bez przesunięcia."
                     TimeSync.Method.TIMEZONE_FALLBACK -> "Wykryto różnicę strefy czasowej kamery: ${sync.timezoneHours} h."
                     TimeSync.Method.ALIGN_START -> "Zegary kamery i licznika się nie zgadzają — wyrównano początek aktywności do początku filmu."
