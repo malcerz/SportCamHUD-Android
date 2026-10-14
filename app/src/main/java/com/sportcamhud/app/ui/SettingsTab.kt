@@ -41,7 +41,7 @@ fun SettingsTab(vm: HudViewModel, onConnectGarmin: () -> Unit) {
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Automatycznie szukaj aktywności po wybraniu filmu", Modifier.weight(1f))
-                    Switch(checked = vm.autoGarmin, onCheckedChange = vm::setAutoGarmin)
+                    Switch(checked = vm.autoGarmin, onCheckedChange = vm::changeAutoGarmin)
                 }
             }
         }

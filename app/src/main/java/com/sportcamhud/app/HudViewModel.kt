@@ -210,7 +210,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setAutoGarmin(value: Boolean) {
+    fun changeAutoGarmin(value: Boolean) {
         autoGarmin = value
         prefs.edit().putBoolean("auto_garmin", value).apply()
     }
