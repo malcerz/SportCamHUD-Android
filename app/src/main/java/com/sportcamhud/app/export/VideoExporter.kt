@@ -17,7 +17,8 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
-import com.google.common.collect.ImmutableList
+import androidx.media3.common.Effect
+import androidx.media3.effect.TextureOverlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -58,7 +59,7 @@ class VideoExporter(private val context: Context) {
         }.build()
         val item = MediaItem.Builder().setUri(input).setClippingConfiguration(clipping).build()
         val edited = EditedMediaItem.Builder(item)
-            .setEffects(Effects(ImmutableList.of(), ImmutableList.of(OverlayEffect(ImmutableList.of(overlay)))))
+            .setEffects(Effects(listOf(), listOf<Effect>(OverlayEffect(listOf<TextureOverlay>(overlay)))))
             .build()
 
         coroutineScope {
