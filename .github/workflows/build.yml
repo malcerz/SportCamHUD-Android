@@ -1,0 +1,39 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test core
+        run: ./gradlew --no-daemon :core:test
+      - name: Build debug APK
+        run: ./gradlew --no-daemon :app:assembleDebug
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk SportCamHUD-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SportCamHUD-debug-apk
+          path: SportCamHUD-debug.apk
+      - name: Publish to "latest" release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: SportCamHUD (najnowsza wersja)
+          prerelease: true
+          files: SportCamHUD-debug.apk
