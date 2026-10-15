@@ -1,6 +1,14 @@
 package com.sportcamhud.app.ui
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -92,6 +100,7 @@ fun SportCamHudApp(vm: HudViewModel) {
         }
 
         vm.activityChoices?.let { ActivityChoiceDialog(it, onChoose = vm::chooseActivity) }
+        vm.crashReport?.let { CrashReportDialog(it, onClose = { vm.crashReport = null }) }
     }
 }
 
@@ -128,5 +137,40 @@ fun ActivityChoiceDialog(ranked: List<ActivityMatcher.Ranked>, onChoose: (com.sp
         },
         confirmButton = {},
         dismissButton = { TextButton(onClick = { onChoose(null) }) { Text("Pomiń") } },
+    )
+}
+
+/** Shown once after the app died: the saved cause, to copy or share with the developer. */
+@Composable
+fun CrashReportDialog(report: String, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Aplikacja została ostatnio zamknięta z błędem") },
+        text = {
+            Column {
+                Text("Wyślij ten raport, żeby można było znaleźć przyczynę.", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    report,
+                    Modifier.padding(top = 8.dp).heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "SportCamHUD: raport błędu")
+                    .putExtra(Intent.EXTRA_TEXT, report)
+                context.startActivity(Intent.createChooser(send, "Wyślij raport"))
+            }) { Text("Udostępnij") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(report)) }) { Text("Kopiuj") }
+                TextButton(onClick = onClose) { Text("Zamknij") }
+            }
+        },
     )
 }

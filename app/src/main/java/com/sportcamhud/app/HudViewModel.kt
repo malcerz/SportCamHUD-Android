@@ -84,6 +84,10 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     var exportProgress by mutableIntStateOf(0); private set
     var exportResult by mutableStateOf<Uri?>(null); private set
     var clipStartMs by mutableLongStateOf(0L)
+    /** Shorter side of the rendered film in px; 0 keeps the original size. */
+    var exportShortSide by mutableIntStateOf(prefs.getInt("export_short_side", 1080)); private set
+    /** Why the previous run of the app died, shown once on launch. */
+    var crashReport by mutableStateOf(CrashLog.takeReport(app))
     var clipEndMs by mutableLongStateOf(0L)
     private var exportJob: Job? = null
 
@@ -373,17 +377,37 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- export ---------------------------------------------------------------
+    fun changeExportShortSide(px: Int) {
+        exportShortSide = px
+        prefs.edit().putInt("export_short_side", px).apply()
+    }
+
+    /** Output size for the chosen resolution (never upscaled, even dimensions). */
+    fun exportSize(v: VideoInfo): Pair<Int, Int> {
+        val short = minOf(v.displayWidth, v.displayHeight)
+        if (exportShortSide <= 0 || short <= exportShortSide) return v.displayWidth to v.displayHeight
+        val f = exportShortSide.toDouble() / short
+        fun even(x: Double) = (Math.round(x / 2.0) * 2).toInt()
+        return even(v.displayWidth * f) to even(v.displayHeight * f)
+    }
+
     fun startExport() {
         val v = video ?: return
         if (exporting) return
         exporting = true
         exportProgress = 0
         exportResult = null
+        // Free the preview's hardware decoder: 4K decode + decode + encode at once is too much for some phones.
         player.pause()
+        val resumeAt = player.currentPosition
+        player.stop()
         val exportLayout = layout
         val tl = timeline
         val clipStart = clipStartMs
         val clipEnd = clipEndMs.takeIf { it in (clipStart + 1) until v.durationMs }
+        val (outW, outH) = exportSize(v)
+        CrashLog.exportStarted()
+        CrashLog.step("${v.name}: ${v.width}x${v.height} rot=${v.rotation}, ${v.durationMs} ms, ${v.sizeBytes / 1048576} MB; fragment $clipStart–${clipEnd ?: v.durationMs} ms; wynik ${outW}x$outH")
         exportJob = viewModelScope.launch {
             try {
                 // Download every map tile the route needs before rendering starts.
@@ -393,29 +417,45 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
                     status = "Pobieranie kafelków mapy…"
                     val z = map.int("zoom", 16).coerceIn(1, MapRenderer.maxZoom(map.string("map_style", "light_all")))
                     // Same reach as MapRenderer: half the map size (+45 % for track-up rotation) in tile pixels.
-                    val tileScale = maxOf(0.5, minOf(v.displayWidth, v.displayHeight) / 1080.0)
-                    val radius = map.double("size", 18.0) / 100.0 * v.displayWidth / 2 * 1.45 / tileScale
+                    val tileScale = maxOf(0.5, minOf(outW, outH) / 1080.0)
+                    val radius = map.double("size", 18.0) / 100.0 * outW / 2 * 1.45 / tileScale
                     val needed = MapRenderer.tilesForTrack(track.map { it.lat to it.lon }, z, radius)
-                    withContext(Dispatchers.IO) { tiles.prefetch(map.string("map_style", "light_all"), needed) }
+                    CrashLog.step("kafelki mapy: ${needed.size}, zoom $z")
+                    withContext(Dispatchers.IO) {
+                        try {
+                            tiles.prefetch(map.string("map_style", "light_all"), needed)
+                        } catch (e: Exception) {
+                            CrashLog.step("kafelki nie pobrane: $e") // the map then draws what is cached
+                        }
+                    }
                 }
                 status = "Renderowanie filmu z nakładką…"
+                val exporter = VideoExporter(ctx)
+                val source = withContext(Dispatchers.IO) { exporter.probe(v.uri) }
+                CrashLog.step("źródło: ${source.describe}, HDR=${source.hdr}")
                 val compositor = HudCompositor()
                 var hudCanvas: AndroidHudCanvas? = null
-                val overlay = HudOverlay { canvas, w, h, ptsUs ->
+                val overlay = HudOverlay(log = CrashLog::step) { canvas, w, h, ptsUs ->
                     val c = hudCanvas?.also { it.reset(canvas) } ?: AndroidHudCanvas(canvas, w, h).also { hudCanvas = it }
                     // Clipped exports restart presentation time at 0: add the clip start back.
                     val posMs = clipStart + ptsUs / 1000
                     compositor.render(c, w, h, exportLayout, tl?.frameAt(posMs), tiles)
                 }
-                val uri = VideoExporter(ctx).export(v.uri, clipStart, clipEnd, overlay, v.name) { exportProgress = it }
+                val plans = exporter.plans(source, outW, outH)
+                val uri = exporter.export(v.uri, clipStart, clipEnd, overlay, v.name, plans, CrashLog::step) { exportProgress = it }
                 exportResult = uri
                 status = "Gotowe! Film zapisano w Filmy/SportCamHUD."
+                CrashLog.exportFinished("zapisano")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 status = "Przerwano renderowanie."
-            } catch (e: Exception) {
-                status = e.message ?: "Renderowanie nie powiodło się."
+                CrashLog.exportFinished("przerwano")
+            } catch (e: Throwable) {
+                status = e.message ?: "Renderowanie nie powiodło się: $e"
+                CrashLog.exportFinished("błąd: $e")
             } finally {
                 exporting = false
+                player.prepare()
+                player.seekTo(resumeAt)
             }
         }
     }

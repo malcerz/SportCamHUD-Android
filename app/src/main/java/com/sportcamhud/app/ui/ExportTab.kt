@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -57,8 +58,23 @@ fun ExportTab(vm: HudViewModel) {
             valueRange = 0f..v.durationMs.toFloat().coerceAtLeast(1f),
             enabled = !vm.exporting,
         )
+        Text("Rozdzielczość filmu wynikowego")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(0 to "Oryginalna", 1080 to "1080p", 720 to "720p").forEach { (px, label) ->
+                FilterChip(
+                    selected = vm.exportShortSide == px,
+                    onClick = { vm.changeExportShortSide(px) },
+                    label = { Text(label) },
+                    enabled = !vm.exporting,
+                )
+            }
+        }
+        val (outW, outH) = vm.exportSize(v)
         Text(
-            "Wynik: ${v.displayWidth}×${v.displayHeight}, z dźwiękiem, zapis do Filmy/SportCamHUD.",
+            "Wynik: ${outW}×${outH}, z dźwiękiem, zapis do Filmy/SportCamHUD." +
+                if (minOf(v.displayWidth, v.displayHeight) > 1080 && vm.exportShortSide == 0) {
+                    " Eksport w 4K jest wolny i nie każdy telefon go udźwignie."
+                } else "",
             style = MaterialTheme.typography.bodySmall,
         )
 

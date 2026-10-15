@@ -25,6 +25,8 @@ import kotlin.math.roundToInt
 @OptIn(UnstableApi::class)
 class HudOverlay(
     private val maxDim: Int = 1920,
+    /** Diagnostics sink (the export step log). */
+    private val log: ((String) -> Unit)? = null,
     /** Draws the HUD for [presentationTimeUs] onto a transparent canvas of the given size. */
     private val draw: (canvas: Canvas, width: Int, height: Int, presentationTimeUs: Long) -> Unit,
 ) : BitmapOverlay() {
@@ -35,13 +37,6 @@ class HudOverlay(
     private var index = 0
     private var drawErrors = 0
 
-    override fun configure(videoSize: Size) {
-        super.configure(videoSize)
-        factor = minOf(1f, maxDim.toFloat() / max(videoSize.width, videoSize.height))
-        width = (videoSize.width * factor).roundToInt().coerceAtLeast(1)
-        height = (videoSize.height * factor).roundToInt().coerceAtLeast(1)
-    }
-
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
         StaticOverlaySettings.Builder().setScale(1f / factor, 1f / factor).build()
 
@@ -49,23 +44,33 @@ class HudOverlay(
         index = 1 - index
         var bmp = buffers[index]
         if (bmp == null || bmp.width != width || bmp.height != height) {
-            bmp?.recycle()
+            // No recycle(): the GL thread may still be uploading the old bitmap; GC frees it.
             bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             buffers[index] = bmp
         }
         bmp.eraseColor(Color.TRANSPARENT)
         try {
             draw(Canvas(bmp), width, height, presentationTimeUs)
-        } catch (e: Exception) {
-            // A drawing bug must not abort the whole export; the frame just gets no HUD.
-            if (drawErrors++ < 5) Log.e("HudOverlay", "HUD draw failed at ${presentationTimeUs}us", e)
+        } catch (e: Throwable) {
+            // A drawing bug (or OOM) must not kill the app mid-export; the frame just gets no HUD.
+            if (drawErrors++ < 5) {
+                Log.e("HudOverlay", "HUD draw failed at ${presentationTimeUs}us", e)
+                log?.invoke("błąd rysowania HUD przy ${presentationTimeUs / 1000} ms: $e")
+            }
         }
         return bmp
     }
 
+    override fun configure(videoSize: Size) {
+        super.configure(videoSize)
+        factor = minOf(1f, maxDim.toFloat() / max(videoSize.width, videoSize.height))
+        width = (videoSize.width * factor).roundToInt().coerceAtLeast(1)
+        height = (videoSize.height * factor).roundToInt().coerceAtLeast(1)
+        log?.invoke("nakładka: wideo ${videoSize.width}x${videoSize.height}, HUD ${width}x$height")
+    }
+
     override fun release() {
         super.release()
-        buffers.forEach { it?.recycle() }
         buffers.fill(null)
     }
 }
