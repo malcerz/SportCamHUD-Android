@@ -12,6 +12,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
@@ -61,6 +62,11 @@ class VideoExporter(private val context: Context) {
         val edited = EditedMediaItem.Builder(item)
             .setEffects(Effects(listOf(), listOf<Effect>(OverlayEffect(listOf<TextureOverlay>(overlay)))))
             .build()
+        // HDR/10-bit GoPro footage is tone-mapped to SDR so the overlay can be composited on any phone.
+        @Suppress("DEPRECATION")
+        val composition = Composition.Builder(EditedMediaItemSequence(listOf(edited)))
+            .setHdrMode(Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL)
+            .build()
 
         coroutineScope {
             var transformer: Transformer? = null
@@ -83,7 +89,7 @@ class VideoExporter(private val context: Context) {
                             override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
                                 if (cont.isActive) {
                                     cont.resumeWithException(
-                                        ExportFailed("Renderowanie nie powiodło się: ${exportException.errorCodeName}"),
+                                        ExportFailed("Renderowanie nie powiodło się: ${exportException.errorCodeName}" + describeCause(exportException)),
                                     )
                                 }
                             }
@@ -91,7 +97,7 @@ class VideoExporter(private val context: Context) {
                         .build()
                     transformer = t
                     cont.invokeOnCancellation { t.cancel() }
-                    t.start(edited, out.absolutePath)
+                    t.start(composition, out.absolutePath)
                 }
             } finally {
                 poller.cancel()
@@ -103,6 +109,13 @@ class VideoExporter(private val context: Context) {
         } finally {
             out.delete()
         }
+    }
+
+    /** Innermost causes of a Media3 error, so a failure on the phone says what actually broke. */
+    private fun describeCause(e: Throwable): String {
+        val parts = generateSequence(e.cause) { it.cause }.take(4)
+            .map { "${it.javaClass.simpleName}: ${it.message ?: ""}".trim() }.toList()
+        return if (parts.isEmpty()) "" else "\n" + parts.joinToString("\n")
     }
 
     private fun saveToMovies(file: File, baseName: String): Uri {

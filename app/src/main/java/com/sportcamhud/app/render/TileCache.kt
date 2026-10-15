@@ -73,7 +73,7 @@ class TileCache(private val dir: File) : TileSource {
         if (f.isFile) return true
         val req = Request.Builder()
             .url(MapRenderer.tileUrl(style, z, x, y))
-            .header("User-Agent", "SportCamHUD-Android/1.0")
+            .header("User-Agent", "SportCamHUD-Android/1.1 (+https://github.com/malcerz/SportCamHUD-Android)")
             .build()
         return try {
             http.newCall(req).execute().use { resp ->

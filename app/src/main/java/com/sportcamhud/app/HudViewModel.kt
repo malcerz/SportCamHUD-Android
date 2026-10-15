@@ -52,7 +52,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     private val layoutFile = File(app.filesDir, "layout.json")
 
     val player: ExoPlayer = ExoPlayer.Builder(app).build()
-    val tiles = TileCache(File(app.cacheDir, "tiles"))
+    val tiles = TileCache(File(app.cacheDir, "tiles_v2")) // v2: CARTO tiles with the API-key stamp are not reused
     val previewCompositor = HudCompositor()
 
     val tokenStore = KeystoreTokenStore(app)
@@ -391,7 +391,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
                 val track = tl?.dataset?.track
                 if (map != null && !track.isNullOrEmpty()) {
                     status = "Pobieranie kafelków mapy…"
-                    val z = map.int("zoom", 16)
+                    val z = map.int("zoom", 16).coerceIn(1, MapRenderer.maxZoom(map.string("map_style", "light_all")))
                     // Same reach as MapRenderer: half the map size (+45 % for track-up rotation) in tile pixels.
                     val tileScale = maxOf(0.5, minOf(v.displayWidth, v.displayHeight) / 1080.0)
                     val radius = map.double("size", 18.0) / 100.0 * v.displayWidth / 2 * 1.45 / tileScale

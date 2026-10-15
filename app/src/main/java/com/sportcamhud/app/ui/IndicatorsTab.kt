@@ -228,8 +228,8 @@ private fun IndicatorEditor(
                         SliderProp("Powiększenie (zoom)", cfg.int("zoom", 16).toDouble(), 10.0, 19.0, integer = true) { onChange(cfg.with("zoom", it.toInt())) }
                         Text("Styl mapy")
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            for (s in MapRenderer.STYLES.keys) {
-                                FilterChip(selected = cfg.string("map_style", "light_all") == s, onClick = { onChange(cfg.with("map_style", s)) }, label = { Text(s) })
+                            for ((s, name) in MapRenderer.STYLE_NAMES) {
+                                FilterChip(selected = cfg.string("map_style", "light_all") == s, onClick = { onChange(cfg.with("map_style", s)) }, label = { Text(name) })
                             }
                         }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {

@@ -40,7 +40,7 @@ fun ExportTab(vm: HudViewModel) {
             Text("Najpierw wybierz film w zakładce Projekt.")
             return@Column
         }
-        if (vm.dataset == null) {
+        if (vm.dataset == null && vm.camera == null) {
             Text(
                 "Brak telemetrii — film zostanie wyrenderowany tylko z datą i godziną. Wczytaj plik FIT lub pobierz go z Garmin Connect.",
                 style = MaterialTheme.typography.bodySmall,

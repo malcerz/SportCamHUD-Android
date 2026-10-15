@@ -16,15 +16,37 @@ object MapRenderer {
     const val TILE = 256
 
     /** Map styles of the Windows app. */
+    /**
+     * Tile sources. CARTO basemaps now stamp "API KEY REQUIRED" on every tile, so the old
+     * CARTO style names (kept for Windows preset compatibility) map to keyless sources.
+     */
+    private const val OSM = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    private const val ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/"
     val STYLES = linkedMapOf(
-        "light_all" to "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
-        "light_nolabels" to "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
-        "dark_all" to "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "dark_nolabels" to "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-        "voyager_all" to "https://a.basemaps.cartocdn.com/voyager_all/{z}/{x}/{y}.png",
-        "voyager_nolabels" to "https://a.basemaps.cartocdn.com/voyager_nolabels/{z}/{x}/{y}.png",
-        "satellite" to "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "light_all" to OSM,
+        "light_nolabels" to ESRI + "Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        "dark_all" to ESRI + "Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        "dark_nolabels" to ESRI + "Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        "voyager_all" to ESRI + "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+        "voyager_nolabels" to ESRI + "World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        "satellite" to ESRI + "World_Imagery/MapServer/tile/{z}/{y}/{x}",
     )
+
+    /** Human names for the style picker. */
+    val STYLE_NAMES = linkedMapOf(
+        "light_all" to "OpenStreetMap",
+        "light_nolabels" to "Jasna (Esri)",
+        "dark_all" to "Ciemna (Esri)",
+        "voyager_all" to "Ulice (Esri)",
+        "voyager_nolabels" to "Topograficzna (Esri)",
+        "satellite" to "Satelita (Esri)",
+    )
+
+    /** Highest zoom each source serves; a higher configured zoom is clamped to it. */
+    fun maxZoom(style: String): Int = when (style) {
+        "light_nolabels", "dark_all", "dark_nolabels" -> 16
+        else -> 19
+    }
 
     fun tileUrl(style: String, z: Int, x: Int, y: Int): String =
         (STYLES[style] ?: STYLES.getValue("light_all")).replace("{z}", "$z").replace("{x}", "$x").replace("{y}", "$y")
@@ -59,7 +81,7 @@ object MapRenderer {
         val half = size / 2
         val cx = ctx.px(cfg)
         val cy = ctx.py(cfg)
-        val z = cfg.int("zoom", 16).coerceIn(1, 19)
+        val z = cfg.int("zoom", 16).coerceIn(1, maxZoom(cfg.string("map_style", "light_all")))
         val ts = max(0.5f, ctx.scale1080)
         val style = cfg.string("map_style", "light_all")
         val circle = cfg.string("map_shape", "square") == "circle"
@@ -115,6 +137,12 @@ object MapRenderer {
         val mr = max(3f, cfg.float("marker_size", 7f) * ts)
         c.fillCircle(cx, cy, mr + 2 * ts, Colors.argb(255, 30, 30, 30))
         c.fillCircle(cx, cy, mr, Colors.parse(cfg.string("marker_color", "#FFFFFF")) ?: Colors.WHITE)
+        // Attribution required by the tile providers' terms.
+        if (tiles != null && cfg.bool("show_attribution", true)) {
+            val credit = if (style == "light_all") "© OpenStreetMap" else "© Esri"
+            val fs = max(8f, size * 0.045f)
+            c.text(credit, cx + half - 3 * ts, cy + half - 3 * ts, TextStyle(fs, Colors.argb(220, 40, 40, 40)), HAlign.RIGHT, VAlign.BOTTOM)
+        }
         c.restore()
     }
 }
