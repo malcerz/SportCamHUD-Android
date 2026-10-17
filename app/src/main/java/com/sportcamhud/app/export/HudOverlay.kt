@@ -16,8 +16,9 @@ import kotlin.math.roundToInt
 /**
  * Media3 overlay that draws the HUD for every exported frame.
  *
- * Two bitmaps are used alternately: BitmapOverlay re-uploads its texture only when it
- * receives a different Bitmap instance, so ping-ponging guarantees a fresh HUD per frame.
+ * The same Bitmap is redrawn for each frame. Media3 BitmapOverlay (1.7.1) checks
+ * Bitmap.getGenerationId(), so eraseColor()/drawing triggers a new GL texture upload.
+ * One bitmap avoids wasting memory on a second full-frame allocation.
  *
  * For large videos (4K) the HUD is drawn at most [maxDim] pixels wide/high and scaled up on
  * the GPU: a full 4K ARGB bitmap per frame is slow and can exhaust memory on phones.
@@ -33,21 +34,20 @@ class HudOverlay(
     private var width = 0
     private var height = 0
     private var factor = 1f
-    private val buffers = arrayOfNulls<Bitmap>(2)
-    private var index = 0
+    private var buffer: Bitmap? = null
     private var drawErrors = 0
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
         StaticOverlaySettings.Builder().setScale(1f / factor, 1f / factor).build()
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
-        index = 1 - index
-        var bmp = buffers[index]
+        var bmp = buffer
         if (bmp == null || bmp.width != width || bmp.height != height) {
-            // No recycle(): the GL thread may still be uploading the old bitmap; GC frees it.
+            // Avoid recycling a bitmap still referenced by Media3/OpenGL.
             bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            buffers[index] = bmp
+            buffer = bmp
         }
+        // Updates the generation ID and forces BitmapOverlay to upload this frame.
         bmp.eraseColor(Color.TRANSPARENT)
         try {
             draw(Canvas(bmp), width, height, presentationTimeUs)
@@ -71,6 +71,6 @@ class HudOverlay(
 
     override fun release() {
         super.release()
-        buffers.fill(null)
+        buffer = null
     }
 }
