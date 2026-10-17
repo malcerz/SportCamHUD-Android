@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
@@ -119,7 +120,7 @@ class VideoExporter(private val context: Context) {
         input: Uri,
         clipStartMs: Long,
         clipEndMs: Long?,
-        overlay: HudOverlay,
+        overlayFactory: () -> HudOverlay,
         outputName: String,
         plans: List<Plan>,
         log: (String) -> Unit,
@@ -129,10 +130,12 @@ class VideoExporter(private val context: Context) {
         val errors = mutableListOf<String>()
         try {
             for ((i, plan) in plans.withIndex()) {
-                log("próba ${i + 1}/${plans.size}: ${plan.label}")
+                log("próba ${i + 1}/${plans.size}: ${plan.label}, wyjście H.264/AVC")
                 onProgress(0)
                 try {
-                    render(input, clipStartMs, clipEndMs, overlay, plan, out, log, onProgress)
+                    // A failed Transformer may have released the previous overlay's GL texture.
+                    // Give every attempt its own bitmap, compositor and GL lifetime.
+                    render(input, clipStartMs, clipEndMs, overlayFactory(), plan, out, log, onProgress)
                     log("render OK: ${plan.label}")
                     errors.clear()
                     break
@@ -194,6 +197,10 @@ class VideoExporter(private val context: Context) {
             try {
                 suspendCancellableCoroutine<Unit> { cont ->
                     val t = Transformer.Builder(context)
+                        // The source may be GoPro HEVC Main10, but the phone's HEVC encoder
+                        // may not support editing/overlays. AVC is the compatible SDR output.
+                        // Audio is still passed through by Transformer when possible.
+                        .setVideoMimeType(MimeTypes.VIDEO_H264)
                         .addListener(object : Transformer.Listener {
                             override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                                 if (cont.isActive) cont.resume(Unit)
