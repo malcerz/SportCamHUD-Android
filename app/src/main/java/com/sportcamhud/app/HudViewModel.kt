@@ -433,16 +433,21 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
                 val exporter = VideoExporter(ctx)
                 val source = withContext(Dispatchers.IO) { exporter.probe(v.uri) }
                 CrashLog.step("źródło: ${source.describe}, HDR=${source.hdr}")
-                val compositor = HudCompositor()
-                var hudCanvas: AndroidHudCanvas? = null
-                val overlay = HudOverlay(log = CrashLog::step) { canvas, w, h, ptsUs ->
-                    val c = hudCanvas?.also { it.reset(canvas) } ?: AndroidHudCanvas(canvas, w, h).also { hudCanvas = it }
-                    // Clipped exports restart presentation time at 0: add the clip start back.
-                    val posMs = clipStart + ptsUs / 1000
-                    compositor.render(c, w, h, exportLayout, tl?.frameAt(posMs), tiles)
+                // A failed export releases Media3's GL resources. Never reuse an overlay
+                // or its drawing state in the retry at another resolution/HDR mode.
+                val overlayFactory: () -> HudOverlay = {
+                    val compositor = HudCompositor()
+                    var hudCanvas: AndroidHudCanvas? = null
+                    HudOverlay(log = CrashLog::step) { canvas, w, h, ptsUs ->
+                        val c = hudCanvas?.also { it.reset(canvas) }
+                            ?: AndroidHudCanvas(canvas, w, h).also { hudCanvas = it }
+                        // Clipped exports restart presentation time at 0: add the clip start back.
+                        val posMs = clipStart + ptsUs / 1000
+                        compositor.render(c, w, h, exportLayout, tl?.frameAt(posMs), tiles)
+                    }
                 }
                 val plans = exporter.plans(source, outW, outH)
-                val uri = exporter.export(v.uri, clipStart, clipEnd, overlay, v.name, plans, CrashLog::step) { exportProgress = it }
+                val uri = exporter.export(v.uri, clipStart, clipEnd, overlayFactory, v.name, plans, CrashLog::step) { exportProgress = it }
                 exportResult = uri
                 status = "Gotowe! Film zapisano w Filmy/SportCamHUD."
                 CrashLog.exportFinished("zapisano")
