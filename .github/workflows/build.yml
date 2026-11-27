@@ -71,10 +71,13 @@ jobs:
           "$APKSIGNER" verify --verbose SportCamHUD-release.apk
           # Hash the canonical DER certificate bytes, not human-readable keytool output.
           KEY_SHA="$(keytool -exportcert -keystore "$ANDROID_SIGNING_STORE_FILE" -storepass:env ANDROID_SIGNING_STORE_PASSWORD -alias "$ANDROID_SIGNING_KEY_ALIAS" 2>/dev/null | sha256sum | cut -d " " -f 1)"
-          APK_SHA="$("$APKSIGNER" verify --print-certs SportCamHUD-release.apk | sed -nE "s/^[[:space:]]*Signer #[0-9]+ certificate SHA-256 digest:[[:space:]]*([0-9a-fA-F]+).*$/\1/p" | head -n 1 | tr "[:upper:]" "[:lower:]")"
+          # Output labels vary between Android Build Tools; match the certificate hash itself.
+          APK_CERT_INFO="$("$APKSIGNER" verify --print-certs --verbose SportCamHUD-release.apk 2>&1)"
           echo "Developer certificate SHA-256: $KEY_SHA"
-          echo "APK certificate SHA-256: $APK_SHA"
-          test -n "$KEY_SHA" && test -n "$APK_SHA" && test "$KEY_SHA" = "$APK_SHA" || { echo "::error::APK signing certificate does not match the developer keystore."; exit 1; }
+          echo "APK certificate fingerprint lines:"
+          printf "%s\n" "$APK_CERT_INFO" | grep -Ei "sha.?256" || true
+          NORMALIZED_CERT_INFO="$(printf "%s\n" "$APK_CERT_INFO" | tr "[:upper:]" "[:lower:]" | tr -d ":")"
+          test -n "$KEY_SHA" && grep -Fq "$KEY_SHA" <<< "$NORMALIZED_CERT_INFO" || { echo "::error::APK signing certificate does not match the developer keystore."; exit 1; }
           echo "APK signature matches configured developer keystore."
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'pull_request'
