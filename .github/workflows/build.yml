@@ -21,19 +21,73 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Test core
         run: ./gradlew --no-daemon :core:test
-      - name: Build debug APK
+      # PRs must not receive signing secrets (including PRs from forks).
+      - name: Build debug APK for PR validation
+        if: github.event_name == 'pull_request'
         run: ./gradlew --no-daemon :app:assembleDebug
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk SportCamHUD-debug.apk
+      - name: Restore developer signing keystore
+        if: github.event_name != 'pull_request'
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 || secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in SIGNING_KEYSTORE_BASE64 ANDROID_SIGNING_STORE_PASSWORD ANDROID_SIGNING_KEY_ALIAS ANDROID_SIGNING_KEY_PASSWORD; do
+            if [[ -z "$(printenv "$key")" ]]; then
+              echo "::error::Missing signing secret for $key. Supported names: KEYSTORE_BASE64/KEYSTORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD (or ANDROID_ prefix)."
+              exit 1
+            fi
+          done
+          KEYSTORE_FILE="$RUNNER_TEMP/sportcamhud-signing-keystore"
+          (umask 077; printf "%s" "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE")
+          test -s "$KEYSTORE_FILE" || { echo "::error::Signing keystore is empty."; exit 1; }
+          keytool -list -keystore "$KEYSTORE_FILE" -storepass:env ANDROID_SIGNING_STORE_PASSWORD -alias "$ANDROID_SIGNING_KEY_ALIAS" >/dev/null
+          STORE_TYPE="$(LC_ALL=C keytool -list -keystore "$KEYSTORE_FILE" -storepass:env ANDROID_SIGNING_STORE_PASSWORD | sed -n "s/^Keystore type: //p" | head -n 1)"
+          test -n "$STORE_TYPE" || { echo "::error::Could not detect keystore type."; exit 1; }
+          echo "ANDROID_SIGNING_STORE_FILE=$KEYSTORE_FILE" >> "$GITHUB_ENV"
+          echo "ANDROID_SIGNING_STORE_TYPE=$STORE_TYPE" >> "$GITHUB_ENV"
+          echo "Developer signing keystore validated ($STORE_TYPE)."
+      - name: Build signed release APK
+        if: github.event_name != 'pull_request'
+        env:
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon :app:assembleRelease
+      - name: Verify APK certificate against developer keystore
+        if: github.event_name != 'pull_request'
+        env:
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.ANDROID_KEY_ALIAS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/release/app-release.apk SportCamHUD-release.apk
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER" || { echo "::error::Android apksigner not found."; exit 1; }
+          "$APKSIGNER" verify --verbose SportCamHUD-release.apk
+          KEY_SHA="$(LC_ALL=C keytool -list -v -keystore "$ANDROID_SIGNING_STORE_FILE" -storepass:env ANDROID_SIGNING_STORE_PASSWORD -alias "$ANDROID_SIGNING_KEY_ALIAS" | sed -n "s/^[[:space:]]*SHA256: //p" | head -n 1 | tr -d ":" | tr "[:upper:]" "[:lower:]")"
+          APK_SHA="$("$APKSIGNER" verify --print-certs SportCamHUD-release.apk | sed -n "s/^Signer #1 certificate SHA-256 digest: //p" | head -n 1)"
+          test -n "$KEY_SHA" && test -n "$APK_SHA" && test "$KEY_SHA" = "$APK_SHA" || { echo "::error::APK signing certificate does not match the developer keystore."; exit 1; }
+          echo "APK signature matches configured developer keystore."
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'pull_request'
         with:
-          name: SportCamHUD-debug-apk
-          path: SportCamHUD-debug.apk
-      - name: Publish to "latest" release
+          name: SportCamHUD-pr-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: SportCamHUD-signed-release-apk
+          path: SportCamHUD-release.apk
+      - name: Publish signed APK to latest release
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: SportCamHUD (najnowsza wersja)
           prerelease: true
-          files: SportCamHUD-debug.apk
+          files: SportCamHUD-release.apk

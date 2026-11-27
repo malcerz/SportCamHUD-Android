@@ -14,12 +14,25 @@ android {
         applicationId = "com.sportcamhud.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.1.1"
+    }
+
+    // The signing keystore is restored only on GitHub Actions runners.
+    // Debug builds remain possible without secrets, but release builds must be signed.
+    signingConfigs {
+        create("developerRelease") {
+            providers.environmentVariable("ANDROID_SIGNING_STORE_FILE").orNull?.let { storeFile = file(it) }
+            storePassword = providers.environmentVariable("ANDROID_SIGNING_STORE_PASSWORD").orNull
+            keyAlias = providers.environmentVariable("ANDROID_SIGNING_KEY_ALIAS").orNull
+            keyPassword = providers.environmentVariable("ANDROID_SIGNING_KEY_PASSWORD").orNull
+            providers.environmentVariable("ANDROID_SIGNING_STORE_TYPE").orNull?.let { storeType = it }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("developerRelease")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
