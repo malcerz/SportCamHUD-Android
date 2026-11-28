@@ -565,6 +565,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
         benchmarkResults = emptyList()
         benchmarkProfile = "${codec.label}, ${outW}×$outH, fragment ${end - start} ms"
         benchmarkPhase = "Przygotowanie…"
+        exportResult = null // Benchmark must not masquerade as an ordinary exported movie.
         exportStats = ExportStats()
         exportProgress = 0
         player.pause()
