@@ -41,6 +41,31 @@ Wymagane: JDK 17+, Android SDK 36.
   Udostępnianie działa z systemowej galerii.
   Aplikację można też otworzyć przez „Udostępnij” z galerii.
 
+## Kodeki i benchmark eksportu (Android 1.3.0)
+
+- Eksport MP4 obsługuje wybór **H.264/AVC**, **H.265/HEVC** i **AV1**.
+  H.264 pozostaje domyślny dla zgodności. H.265 i AV1 są aktywne tylko po
+  wykryciu enkodera *sprzętowego* o wejściu Surface, zgodnego z wybraną
+  rozdzielczością. Sam dekoder AV1 nie jest wystarczający.
+  Wybór zapisuje się w ustawieniach aplikacji. Błąd kodowania nie powoduje
+  cichej zamiany kodeka na H.264.
+- W zakładce **Eksport** wybierz rozdzielczość i kodek, następnie przycisk
+  **Benchmark: 3 × 12 s**. Dla tego samego fragmentu wykonywane są kolejno:
+  (1) **kodek bez HUD**: Presentation + enkoder, bez BitmapOverlay,
+  (2) **pusta nakładka GL**: ten sam enkoder, czyszczona bitmapa i transfer do GL,
+  (3) **pełny HUD**: rzeczywisty render wskaźników.
+- Wyniki prezentują FPS, czas kodowania, liczbę klatek, użyty enkoder lub
+  czytelny błąd. Media3 `ExportResult` służy do sprawdzenia, czy naprawdę
+  nastąpiło **transkodowanie** (szybki transmux oznacza test niemiarodajny).
+  Pomiar FPS bazuje na zakodowanych klatkach i czasie transkodowania, a nie
+  samym liczniku bitmap HUD.
+- Benchmark pomija audio, nie zapisuje filmów w galerii i usuwa trzy MP4
+  tymczasowe. Nie wykonuje automatycznych zmian rozdzielczości między etapami.
+  Przed rozpoczęciem zatrzymuje dekoder podglądu, a po zakończeniu go przywraca.
+- Wskazania maksymalnych FPS z `MediaCodecInfo` są *szacunkami sterownika*.
+  Sprzętowa dostępność kodera nie gwarantuje sukcesu dla każdego GoPro HDR
+  ani wydajności powyżej czasu rzeczywistego.
+
 ## Korekta położenia HUD (Android 1.2.1)
 
 - `track_map` z Windows `def_layout.json` wykorzystuje `map_anchor: "topleft"`:
