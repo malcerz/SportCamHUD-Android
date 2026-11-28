@@ -3,8 +3,10 @@ package com.sportcamhud.app.ui
 import androidx.annotation.OptIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +37,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.util.UnstableApi
@@ -78,52 +81,48 @@ fun PreviewPane(vm: HudViewModel, editMode: Boolean = false) {
     // Selecting a widget does not open a modal: touch its image, then drag it
     // directly. Touch coordinates are mapped from the *video box* to the
     // original video resolution; black letterbox margins never count as pixels.
-    val editGestures = if (editMode) Modifier
-        .pointerInput(vw, vh) {
-            detectTapGestures(onTap = { at ->
-                val key = IndicatorPlacement.hitTest(
-                    vm.layout, vw, vh,
-                    at.x * vw / size.width, at.y * vh / size.height,
-                    24f * vw / size.width,
-                )
-                vm.selectedKey = key
-            })
-        }
-        .pointerInput(vw, vh) {
-            var dragKey: String? = null
-            detectDragGestures(
-                onDragStart = { at ->
-                    dragKey = IndicatorPlacement.hitTest(
-                        vm.layout, vw, vh,
-                        at.x * vw / size.width, at.y * vh / size.height,
-                        24f * vw / size.width,
-                    )
-                    dragKey?.let {
-                        vm.selectedKey = it
-                        vm.player.pause()
-                    }
-                },
-                onDrag = { change, delta ->
-                    val key = dragKey ?: return@detectDragGestures
-                    val cfg = vm.layout.indicators[key] ?: return@detectDragGestures
-                    change.consume()
-                    val (x, y) = IndicatorPlacement.clampPosition(
-                        cfg, vw, vh,
-                        cfg.x + delta.x / size.width * 100.0,
-                        cfg.y + delta.y / size.height * 100.0,
-                    )
-                    vm.updateIndicator(cfg.withAll(mapOf("x" to x, "y" to y)), persist = false)
-                },
-                onDragEnd = {
-                    if (dragKey != null) vm.persistNow()
-                    dragKey = null
-                },
-                onDragCancel = {
-                    if (dragKey != null) vm.persistNow()
-                    dragKey = null
-                },
+    // One gesture recognizer handles both short taps and drags. Separate
+    // detectTapGestures/detectDragGestures modifiers consume one another's
+    // initial pointer down and make dragging appear broken on some devices.
+    val editGestures = if (editMode) Modifier.pointerInput(vw, vh) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val hit = IndicatorPlacement.hitTest(
+                vm.layout, vw, vh,
+                down.position.x * vw / size.width, down.position.y * vh / size.height,
+                24f * vw / size.width,
             )
-        } else Modifier
+            fun moveBy(dx: Float, dy: Float) {
+                val key = hit ?: return
+                val cfg = vm.layout.indicators[key] ?: return
+                val (x, y) = IndicatorPlacement.clampPosition(
+                    cfg, vw, vh,
+                    cfg.x + dx / size.width * 100.0,
+                    cfg.y + dy / size.height * 100.0,
+                )
+                vm.updateIndicator(cfg.withAll(mapOf("x" to x, "y" to y)), persist = false)
+            }
+            val slop = awaitTouchSlopOrCancellation(down.id) { change, overSlop ->
+                if (hit != null) {
+                    change.consume()
+                    vm.selectedKey = hit
+                    vm.player.pause()
+                    moveBy(overSlop.x, overSlop.y)
+                }
+            }
+            if (slop == null) {
+                // Short tap: select a widget without opening the properties dialog.
+                vm.selectedKey = hit
+            } else if (hit != null) {
+                drag(slop.id) { change ->
+                    val delta = change.positionChange()
+                    change.consume()
+                    moveBy(delta.x, delta.y)
+                }
+                vm.persistNow()
+            }
+        }
+    } else Modifier
 
     Column {
         Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
