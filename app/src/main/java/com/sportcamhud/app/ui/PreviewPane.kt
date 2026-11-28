@@ -53,7 +53,12 @@ import com.sportcamhud.core.render.IndicatorPlacement
  */
 @OptIn(UnstableApi::class)
 @Composable
-fun PreviewPane(vm: HudViewModel, editMode: Boolean = false) {
+fun PreviewPane(
+    vm: HudViewModel,
+    editMode: Boolean = false,
+    fullscreen: Boolean = false,
+    onFullScreenEdit: (() -> Unit)? = null,
+) {
     val v = vm.video
     if (v == null) {
         Box(
@@ -124,9 +129,18 @@ fun PreviewPane(vm: HudViewModel, editMode: Boolean = false) {
         }
     } else Modifier
 
-    Column {
-        Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
-        Box(Modifier.heightIn(max = 420.dp).aspectRatio(vw.toFloat() / vh)) {
+    Column(if (fullscreen) Modifier.fillMaxSize() else Modifier) {
+        Box(
+            (if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth())
+                .background(Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
+        // Landscape fullscreen must fit video height; ordinary inline preview
+        // uses width as before. Gesture positions remain video-relative.
+        val videoModifier = if (fullscreen)
+            Modifier.aspectRatio(vw.toFloat() / vh, matchHeightConstraintsFirst = true)
+        else Modifier.heightIn(max = 420.dp).aspectRatio(vw.toFloat() / vh)
+        Box(videoModifier) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
@@ -170,8 +184,14 @@ fun PreviewPane(vm: HudViewModel, editMode: Boolean = false) {
                 }
             }
         }
+        if (editMode && !fullscreen && onFullScreenEdit != null) {
+            TextButton(
+                onClick = onFullScreenEdit,
+                modifier = Modifier.align(Alignment.TopEnd),
+            ) { Text("⛶ Edytuj", color = Color.White) }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        }
+        if (!fullscreen) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { if (vm.player.isPlaying) vm.player.pause() else vm.player.play() }) {
                 Text(if (playing) "⏸" else "▶")
             }
