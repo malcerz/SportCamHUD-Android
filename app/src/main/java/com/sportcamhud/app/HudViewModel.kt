@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -14,6 +15,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import com.sportcamhud.app.export.HudOverlay
+import com.sportcamhud.app.export.ExportStats
 import com.sportcamhud.app.export.VideoExporter
 import com.sportcamhud.app.garmin.KeystoreTokenStore
 import com.sportcamhud.app.render.AndroidHudCanvas
@@ -65,6 +67,8 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     var dataset by mutableStateOf<TelemetryDataset?>(null); private set
     /** GoPro GPMF telemetry embedded in the video (GPS, ISO, shutter, temperature, IMU). */
     var camera by mutableStateOf<CameraTelemetry?>(null); private set
+    /** Shows whether the embedded GoPro metadata stream was found and decoded. */
+    var cameraStatus by mutableStateOf("GPMF: nie sprawdzono"); private set
     var fitSummary by mutableStateOf<FitSummary?>(null); private set
     var telemetryName by mutableStateOf<String?>(null); private set
     var autoSync by mutableStateOf<TimeSync.Result?>(null); private set
@@ -82,6 +86,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
 
     var exporting by mutableStateOf(false); private set
     var exportProgress by mutableIntStateOf(0); private set
+    var exportStats by mutableStateOf(ExportStats()); private set
     var exportResult by mutableStateOf<Uri?>(null); private set
     var clipStartMs by mutableLongStateOf(0L)
     /** Shorter side of the rendered film in px; 0 keeps the original size. */
@@ -116,7 +121,9 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
             busy = true
             try {
                 val info = withContext(Dispatchers.IO) { VideoInfo.probe(ctx, uri) }
-                camera = withContext(Dispatchers.IO) { readCameraTelemetry(uri) }
+                val (cameraData, diagnostic) = withContext(Dispatchers.IO) { readCameraTelemetry(uri) }
+                camera = cameraData
+                cameraStatus = diagnostic
                 video = info
                 clipStartMs = 0
                 clipEndMs = info.durationMs
@@ -136,12 +143,29 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun readCameraTelemetry(uri: Uri): CameraTelemetry? = try {
-        ctx.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-            java.io.FileInputStream(pfd.fileDescriptor).use { GpmfParser.read(ChannelByteSource(it.channel)) }
+    /** Parse the GoPro gpmd track using seekable file descriptors; report failures explicitly. */
+    private fun readCameraTelemetry(uri: Uri): Pair<CameraTelemetry?, String> = try {
+        val cam = ctx.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            java.io.FileInputStream(pfd.fileDescriptor).use { input ->
+                GpmfParser.read(ChannelByteSource(input.channel))
+            }
+        }
+        if (cam == null) {
+            null to "GPMF: nie znaleziono obsługiwanej ścieżki gpmd (lub brak próbek)."
+        } else {
+            val streams = buildList {
+                if (cam.hasGps) add("GPS ${cam.gps.size} próbek")
+                if (cam.iso != null) add("ISO")
+                if (cam.exposure != null) add("migawka")
+                if (cam.cameraTemp != null) add("temperatura")
+                if (cam.hasImu) add("ACCL/GYRO")
+            }
+            cam to "GPMF: odczytano ${streams.joinToString(", ")}" +
+                (cam.deviceName?.let { " ($it)" } ?: "")
         }
     } catch (e: Exception) {
-        null
+        Log.w("SportCamHUD-GPMF", "Nie udało się odczytać GPMF: $uri", e)
+        null to "GPMF: błąd odczytu ${e.javaClass.simpleName}: ${e.message ?: "nieznany"}"
     }
 
     private fun describeCamera(c: CameraTelemetry): String {
@@ -217,7 +241,18 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
         autoSync = sync
         val shifted = ds.shifted(sync.offsetMs + manualOffsetMs)
         val videoStart = start ?: ds.start!!
-        timeline = TelemetryTimeline(shifted, videoStart, v?.durationMs ?: (ds.end!! - ds.start!!), camera = cam)
+        // FIT takes precedence. Missing GPS-derived fields/track fall back to GoPro GPMF,
+        // even if the FIT activity exists but has no reliable GPS.
+        val gopro = cam?.takeIf { it.hasGps }?.toDataset(videoStart)
+        val effective = if (gopro == null) shifted else TelemetryDataset(
+            fields = gopro.fields + shifted.fields,
+            track = shifted.track.ifEmpty { gopro.track },
+            activeTime = shifted.activeTime,
+            timezoneOffsetSec = shifted.timezoneOffsetSec,
+            fieldInfo = gopro.fieldInfo + shifted.fieldInfo,
+            sourceName = "fit+gpmf",
+        )
+        timeline = TelemetryTimeline(effective, videoStart, v?.durationMs ?: (ds.end!! - ds.start!!), camera = cam)
     }
 
     fun frameAt(positionMs: Long): FrameData? = timeline?.frameAt(positionMs)
@@ -310,8 +345,13 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- layout ---------------------------------------------------------------
+    /** Keep the Windows def_layout.json schema and indicator set intact in both directions. */
+    private fun windowsDefaultLayout(): HudLayout = ctx.assets.open("def_layout.json").bufferedReader().use {
+        HudLayout.fromJson(it.readText())
+    }
+
     private fun loadLayout(): HudLayout = try {
-        if (layoutFile.isFile) HudLayout.fromJsonMergedWithDefaults(layoutFile.readText()) else DefaultLayout.create()
+        if (layoutFile.isFile) HudLayout.fromJson(layoutFile.readText()) else windowsDefaultLayout()
     } catch (_: Exception) {
         DefaultLayout.create()
     }
@@ -343,7 +383,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun resetLayout() {
-        layout = DefaultLayout.create()
+        layout = runCatching { windowsDefaultLayout() }.getOrElse { DefaultLayout.create() }
         previewCompositor.invalidate()
         persistLayout(layout)
     }
@@ -353,7 +393,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val text = withContext(Dispatchers.IO) { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } }
                     ?: error("Brak dostępu do pliku")
-                layout = HudLayout.fromJsonMergedWithDefaults(text)
+                layout = HudLayout.fromJson(text)
                 previewCompositor.invalidate()
                 persistLayout(layout)
                 status = "Wczytano preset wskaźników."
@@ -396,6 +436,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
         if (exporting) return
         exporting = true
         exportProgress = 0
+        exportStats = ExportStats()
         exportResult = null
         // Free the preview's hardware decoder: 4K decode + decode + encode at once is too much for some phones.
         player.pause()
@@ -435,10 +476,10 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
                 CrashLog.step("źródło: ${source.describe}, HDR=${source.hdr}")
                 // A failed export releases Media3's GL resources. Never reuse an overlay
                 // or its drawing state in the retry at another resolution/HDR mode.
-                val overlayFactory: () -> HudOverlay = {
+                val overlayFactory: (onFrame: () -> Unit) -> HudOverlay = { onFrame ->
                     val compositor = HudCompositor()
                     var hudCanvas: AndroidHudCanvas? = null
-                    HudOverlay(log = CrashLog::step) { canvas, w, h, ptsUs ->
+                    HudOverlay(log = CrashLog::step, onFrame = onFrame) { canvas, w, h, ptsUs ->
                         val c = hudCanvas?.also { it.reset(canvas) }
                             ?: AndroidHudCanvas(canvas, w, h).also { hudCanvas = it }
                         // Clipped exports restart presentation time at 0: add the clip start back.
@@ -447,7 +488,10 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 val plans = exporter.plans(source, outW, outH)
-                val uri = exporter.export(v.uri, clipStart, clipEnd, overlayFactory, v.name, plans, CrashLog::step) { exportProgress = it }
+                val uri = exporter.export(
+                    v.uri, clipStart, clipEnd, overlayFactory, v.name, plans,
+                    CrashLog::step, { exportProgress = it }, { exportStats = it },
+                )
                 exportResult = uri
                 status = "Gotowe! Film zapisano w Filmy/SportCamHUD."
                 CrashLog.exportFinished("zapisano")

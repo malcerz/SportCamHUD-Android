@@ -59,6 +59,38 @@ class GpmfTest {
     }
 
     @Test
+    fun `GPS5 timestamps and scaling work when metadata follows samples`() {
+        val rawGps = java.nio.ByteBuffer.allocate(40).apply {
+            repeat(2) {
+                putInt(500_614_000)
+                putInt(199_366_000)
+                putInt(230_500)
+                putInt(7_000)
+                putInt(700)
+            }
+        }.array()
+        val rawScale = java.nio.ByteBuffer.allocate(20).apply {
+            listOf(10_000_000, 10_000_000, 1_000, 1_000, 100).forEach { putInt(it) }
+        }.array()
+        val gpsu = java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmss.SSS")
+            .format(java.time.Instant.ofEpochMilli(utcStart).atOffset(ZoneOffset.UTC))
+        val data = SampleGoPro.nest(
+            "DEVC", SampleGoPro.nest(
+                "STRM",
+                SampleGoPro.klv("GPS5", 'l', 20, 2, rawGps),
+                SampleGoPro.klv("GPSF", 'L', 4, 1, java.nio.ByteBuffer.allocate(4).putInt(3).array()),
+                SampleGoPro.klv("GPSU", 'U', 16, 1, gpsu.toByteArray(Charsets.ISO_8859_1)),
+                SampleGoPro.klv("SCAL", 'l', 4, 5, rawScale),
+            ),
+        )
+        val camera = GpmfParser.fromPayloads(listOf(Triple(data, 0.0, 1000.0)))!!
+        assertEquals(utcStart, camera.utcStartMs)
+        assertEquals(2, camera.gps.size)
+        assertEquals(50.0614, camera.gps[0].lat, 1e-6)
+        assertEquals(230.5, camera.gps[0].alt, 1e-6)
+    }
+
+    @Test
     fun `GPS5 with GPSU works for older cameras`() {
         val cam = read(gps9 = false)
         assertEquals(utcStart.toDouble(), cam.utcStartMs!!.toDouble(), 5.0)

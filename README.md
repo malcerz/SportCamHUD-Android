@@ -35,8 +35,24 @@ Wymagane: JDK 17+, Android SDK 36.
   (filtr komplementarny jak w TeleM, z osią, kalibracją, odwróceniem, mnożnikiem i wygładzaniem). Czas startu filmu
   bierze się z GPS kamery, a SmartSync najpierw dopasowuje ślad GPS z FIT do śladu GPS kamery. Bez pliku FIT
   prędkość, dystans, wysokość, kurs i mapa idą z GPS GoPro.
-- **Eksport**: film z nałożonym HUD do `Filmy/SportCamHUD`, wybór fragmentu, postęp, udostępnianie.
+- **Eksport**: film z nałożonym HUD do `Filmy/SportCamHUD`, wybór fragmentu, postęp,
+  chwilowe i średnie FPS (klatki przekazane do nakładki Media3), licznik klatek HUD, czas od startu
+  i szacowany czas do końca (na podstawie postępu Media3). Przy finalizacji ETA jest orientacyjne.
+  Udostępnianie działa z systemowej galerii.
   Aplikację można też otworzyć przez „Udostępnij” z galerii.
+
+## Wspólny preset z Windows i GPMF
+
+- Android zawiera `app/src/main/assets/def_layout.json`, skopiowany z gałęzi `main`
+  `malcerz/SportCamHUD`. Na świeżej instalacji lub po `Resetuj układ` używa właśnie tego presetu.
+- Import i eksport JSON nie domiesza automatycznie wskaźników Androida: nazwy kluczy,
+  pola `source`, style, układ, `global`, `integrations`, `smoothing` i nieznane opcje
+  zachowują się podczas cyklu import → eksport. Jest to **zgodność pliku i odwzorowania danych**;
+  nie wszystkie zaawansowane efekty graficzne Windows mają jeszcze identyczny renderer Android.
+- Odczyt GPMF odbywa się ze ścieżki `gpmd` pliku GoPro przez deskryptor z losowym dostępem.
+  W Projekt/Eksport aplikacja informuje o GPS, ISO, migawce, temperaturze i IMU albo zgłasza
+  brak metadanych/błąd odczytu. Przy obecności FIT brakujące strumienie GPS są uzupełniane z GPMF.
+  Odczyt jest zależny od dostępności ścieżki `gpmd` i możliwości seek dostawcy pliku.
 
 ## Czego nie przeniesiono
 

@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
@@ -37,6 +38,17 @@ import java.util.Date
 import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import java.util.concurrent.atomic.AtomicLong
+
+/** Live export telemetry. FPS counts frames that passed through the HUD compositor. */
+data class ExportStats(
+    val fps: Double = 0.0,
+    val averageFps: Double = 0.0,
+    val frames: Long = 0L,
+    val elapsedSeconds: Long = 0L,
+    val remainingSeconds: Long? = null,
+    val progressPercent: Int = 0,
+)
 
 class ExportFailed(message: String) : Exception(message)
 
@@ -120,11 +132,12 @@ class VideoExporter(private val context: Context) {
         input: Uri,
         clipStartMs: Long,
         clipEndMs: Long?,
-        overlayFactory: () -> HudOverlay,
+        overlayFactory: (onFrame: () -> Unit) -> HudOverlay,
         outputName: String,
         plans: List<Plan>,
         log: (String) -> Unit,
         onProgress: (Int) -> Unit,
+        onStats: (ExportStats) -> Unit,
     ): Uri {
         val out = File(context.cacheDir, "export_${System.currentTimeMillis()}.mp4")
         val errors = mutableListOf<String>()
@@ -132,10 +145,11 @@ class VideoExporter(private val context: Context) {
             for ((i, plan) in plans.withIndex()) {
                 log("próba ${i + 1}/${plans.size}: ${plan.label}, wyjście H.264/AVC")
                 onProgress(0)
+                onStats(ExportStats())
                 try {
                     // A failed Transformer may have released the previous overlay's GL texture.
                     // Give every attempt its own bitmap, compositor and GL lifetime.
-                    render(input, clipStartMs, clipEndMs, overlayFactory(), plan, out, log, onProgress)
+                    render(input, clipStartMs, clipEndMs, overlayFactory, plan, out, log, onProgress, onStats)
                     log("render OK: ${plan.label}")
                     errors.clear()
                     break
@@ -157,12 +171,16 @@ class VideoExporter(private val context: Context) {
         input: Uri,
         clipStartMs: Long,
         clipEndMs: Long?,
-        overlay: HudOverlay,
+        overlayFactory: (onFrame: () -> Unit) -> HudOverlay,
         plan: Plan,
         out: File,
         log: (String) -> Unit,
         onProgress: (Int) -> Unit,
+        onStats: (ExportStats) -> Unit,
     ) {
+        // Count actual overlay invocations, not guessed source FPS or the progress percentage.
+        val frameCount = AtomicLong(0L)
+        val overlay = overlayFactory { frameCount.incrementAndGet() }
         val clipping = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(clipStartMs).apply {
             if (clipEndMs != null) setEndPositionMs(clipEndMs)
         }.build()
@@ -179,19 +197,50 @@ class VideoExporter(private val context: Context) {
 
         coroutineScope {
             var transformer: Transformer? = null
+            val startedAtNs = SystemClock.elapsedRealtimeNanos()
             val poller = launch {
                 val holder = ProgressHolder()
                 var logged = -10
+                var previousFrames = 0L
+                var previousAtNs = startedAtNs
+                var smoothedFps = 0.0
                 while (true) {
-                    delay(300)
+                    delay(500)
                     val t = transformer ?: continue
-                    if (t.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
-                        onProgress(holder.progress)
-                        if (holder.progress >= logged + 10) {
-                            logged = holder.progress - holder.progress % 10
-                            log("postęp ${holder.progress}%")
+                    val state = t.getProgress(holder)
+                    val progress = if (state == Transformer.PROGRESS_STATE_AVAILABLE)
+                        holder.progress.coerceIn(0, 100) else 0
+                    if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                        onProgress(progress)
+                        if (progress >= logged + 10) {
+                            logged = progress - progress % 10
+                            log("postęp $progress%")
                         }
                     }
+                    val nowNs = SystemClock.elapsedRealtimeNanos()
+                    val frames = frameCount.get()
+                    val elapsed = (nowNs - startedAtNs).coerceAtLeast(1L) / 1e9
+                    val dt = (nowNs - previousAtNs) / 1e9
+                    if (dt >= 0.45) {
+                        val sampleFps = (frames - previousFrames).coerceAtLeast(0L) / dt
+                        // Smooth bursty GL callbacks; keep 0 when the compositor stalls.
+                        smoothedFps = if (previousAtNs == startedAtNs) sampleFps
+                            else 0.55 * sampleFps + 0.45 * smoothedFps
+                        previousFrames = frames
+                        previousAtNs = nowNs
+                    }
+                    // Media3 progress includes the encoder/muxer and is a better ETA basis
+                    // than HUD frame count, which can run ahead of the encoder.
+                    val eta = if (progress in 3..99 && elapsed >= 2.0)
+                        (elapsed * (100 - progress) / progress).toLong().coerceAtLeast(0L) else null
+                    onStats(ExportStats(
+                        fps = smoothedFps,
+                        averageFps = frames / elapsed,
+                        frames = frames,
+                        elapsedSeconds = elapsed.toLong(),
+                        remainingSeconds = eta,
+                        progressPercent = progress,
+                    ))
                 }
             }
             try {

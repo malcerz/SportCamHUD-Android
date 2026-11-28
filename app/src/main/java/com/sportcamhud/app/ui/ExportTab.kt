@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.sportcamhud.app.HudViewModel
+import java.util.Locale
 
 @Composable
 fun ExportTab(vm: HudViewModel) {
@@ -41,6 +42,7 @@ fun ExportTab(vm: HudViewModel) {
             Text("Najpierw wybierz film w zakładce Projekt.")
             return@Column
         }
+        Text(vm.cameraStatus, style = MaterialTheme.typography.bodySmall)
         if (vm.dataset == null && vm.camera == null) {
             Text(
                 "Brak telemetrii — film zostanie wyrenderowany tylko z datą i godziną. Wczytaj plik FIT lub pobierz go z Garmin Connect.",
@@ -81,6 +83,12 @@ fun ExportTab(vm: HudViewModel) {
         if (vm.exporting) {
             LinearProgressIndicator(progress = { vm.exportProgress / 100f }, modifier = Modifier.fillMaxWidth())
             Text("Renderowanie: ${vm.exportProgress}%")
+            val stats = vm.exportStats
+            Text("FPS: ${"%.1f".format(Locale.getDefault(), stats.fps)}  " +
+                "(średnio ${"%.1f".format(Locale.getDefault(), stats.averageFps)})")
+            Text("Czas do końca: ${stats.remainingSeconds?.let(::formatExportSeconds) ?: "obliczanie…"}")
+            Text("Upłynęło: ${formatExportSeconds(stats.elapsedSeconds)}, klatek HUD: ${stats.frames}",
+                style = MaterialTheme.typography.bodySmall)
             OutlinedButton(onClick = vm::cancelExport) { Text("Przerwij") }
         } else {
             Button(onClick = {
@@ -88,6 +96,12 @@ fun ExportTab(vm: HudViewModel) {
                     ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
                 if (needsPermission) askStorage.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) else vm.startExport()
             }) { Text("Renderuj film z nakładką") }
+        }
+
+        if (!vm.exporting && vm.exportStats.frames > 0) {
+            Text("Ostatni eksport: ${vm.exportStats.frames} klatek HUD, " +
+                "średnio ${"%.1f".format(Locale.getDefault(), vm.exportStats.averageFps)} FPS",
+                style = MaterialTheme.typography.bodySmall)
         }
 
         vm.exportResult?.let { uri ->
@@ -105,4 +119,11 @@ fun ExportTab(vm: HudViewModel) {
             }
         }
     }
+}
+
+/** Only an estimate: based on Media3 total export progress, not the HUD frame count. */
+private fun formatExportSeconds(seconds: Long): String {
+    val s = seconds.coerceAtLeast(0L)
+    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s / 60) % 60, s % 60)
+        else "%02d:%02d".format(s / 60, s % 60)
 }
