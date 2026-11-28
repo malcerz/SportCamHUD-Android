@@ -132,16 +132,15 @@ object GpmfParser {
         /** Walks one STRM; SCAL/TYPE and GPS status are sticky until the data KLV that uses them. */
         private fun stream(nodes: List<Klv>, startMs: Double, durMs: Double, tempTakenIn: Boolean): Boolean {
             var tempTaken = tempTakenIn
-            var scal: DoubleArray? = null
-            var typeStr: String? = null
-            var gpsu: Long? = null
-            var gpsFix: Int? = null
+            // GoPro does not guarantee SCAL, GPSF or GPSU occur before their data KLV.
+            // Resolve one STRM's metadata first so both GPS5/GPS9 and ISO/IMU remain
+            // independent of container entry order (notably GPSU after GPS5).
+            val scal = nodes.firstOrNull { it.key == "SCAL" }?.numbers()
+            val typeStr = nodes.firstOrNull { it.key == "TYPE" }?.text
+            val gpsu = nodes.firstOrNull { it.key == "GPSU" }?.let { parseGpsu(it.text) }
+            val gpsFix = nodes.firstOrNull { it.key == "GPSF" }?.numbers()?.firstOrNull()?.toInt()
             for (k in nodes) {
                 when (k.key) {
-                    "SCAL" -> scal = k.numbers()
-                    "TYPE" -> typeStr = k.text
-                    "GPSU" -> gpsu = parseGpsu(k.text)
-                    "GPSF" -> gpsFix = k.numbers().firstOrNull()?.toInt()
                     "GPS5" -> gps5(k, scal, gpsu, gpsFix, startMs, durMs)
                     "GPS9" -> gps9(k, typeStr, scal, startMs, durMs)
                     "ISOE" -> timed(k, scal, startMs, durMs, iso)
