@@ -79,7 +79,7 @@ fun indicatorName(cfg: IndicatorConfig): String =
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun IndicatorsTab(vm: HudViewModel) {
+fun IndicatorsTab(vm: HudViewModel, onFullScreenEdit: () -> Unit = {}) {
     var editing by remember { mutableStateOf<String?>(null) }
     var addMenu by remember { mutableStateOf(false) }
     val importPreset = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::importLayout) }
@@ -104,6 +104,7 @@ fun IndicatorsTab(vm: HudViewModel) {
             OutlinedButton(onClick = { importPreset.launch(arrayOf("application/json", "*/*")) }) { Text("Wczytaj preset") }
             OutlinedButton(onClick = { exportPreset.launch("sportcamhud_preset.json") }) { Text("Zapisz preset") }
             TextButton(onClick = vm::resetLayout) { Text("Domyślne") }
+            OutlinedButton(onClick = onFullScreenEdit, enabled = vm.video != null) { Text("⛶ Pełny ekran edycji") }
         }
         Text(
             "Stuknij wskaźnik na filmie lub wybierz go z listy, a potem przeciągnij palcem na podglądzie. " +
