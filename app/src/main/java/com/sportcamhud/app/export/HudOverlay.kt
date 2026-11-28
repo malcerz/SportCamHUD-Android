@@ -28,6 +28,8 @@ class HudOverlay(
     private val maxDim: Int = 1920,
     /** Diagnostics sink (the export step log). */
     private val log: ((String) -> Unit)? = null,
+    /** Called once per frame after the HUD bitmap has been refreshed (GL thread). */
+    private val onFrame: (() -> Unit)? = null,
     /** Draws the HUD for [presentationTimeUs] onto a transparent canvas of the given size. */
     private val draw: (canvas: Canvas, width: Int, height: Int, presentationTimeUs: Long) -> Unit,
 ) : BitmapOverlay() {
@@ -58,6 +60,7 @@ class HudOverlay(
                 log?.invoke("błąd rysowania HUD przy ${presentationTimeUs / 1000} ms: $e")
             }
         }
+        onFrame?.invoke()
         return bmp
     }
 
