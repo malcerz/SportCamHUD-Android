@@ -4,6 +4,7 @@ import androidx.annotation.OptIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +29,7 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -40,6 +42,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.sportcamhud.app.HudViewModel
 import com.sportcamhud.app.render.AndroidHudCanvas
+import com.sportcamhud.core.render.IndicatorPlacement
 
 /**
  * Video with the live HUD on top. The HUD is drawn at the video's own resolution and
@@ -47,7 +50,7 @@ import com.sportcamhud.app.render.AndroidHudCanvas
  */
 @OptIn(UnstableApi::class)
 @Composable
-fun PreviewPane(vm: HudViewModel) {
+fun PreviewPane(vm: HudViewModel, editMode: Boolean = false) {
     val v = vm.video
     if (v == null) {
         Box(
@@ -72,6 +75,56 @@ fun PreviewPane(vm: HudViewModel) {
     val vh = v.displayHeight
     val holder = remember(vw, vh) { arrayOfNulls<AndroidHudCanvas>(1) }
 
+    // Selecting a widget does not open a modal: touch its image, then drag it
+    // directly. Touch coordinates are mapped from the *video box* to the
+    // original video resolution; black letterbox margins never count as pixels.
+    val editGestures = if (editMode) Modifier
+        .pointerInput(vw, vh) {
+            detectTapGestures(onTap = { at ->
+                val key = IndicatorPlacement.hitTest(
+                    vm.layout, vw, vh,
+                    at.x * vw / size.width, at.y * vh / size.height,
+                    24f * vw / size.width,
+                )
+                vm.selectedKey = key
+            })
+        }
+        .pointerInput(vw, vh) {
+            var dragKey: String? = null
+            detectDragGestures(
+                onDragStart = { at ->
+                    dragKey = IndicatorPlacement.hitTest(
+                        vm.layout, vw, vh,
+                        at.x * vw / size.width, at.y * vh / size.height,
+                        24f * vw / size.width,
+                    )
+                    dragKey?.let {
+                        vm.selectedKey = it
+                        vm.player.pause()
+                    }
+                },
+                onDrag = { change, delta ->
+                    val key = dragKey ?: return@detectDragGestures
+                    val cfg = vm.layout.indicators[key] ?: return@detectDragGestures
+                    change.consume()
+                    val (x, y) = IndicatorPlacement.clampPosition(
+                        cfg, vw, vh,
+                        cfg.x + delta.x / size.width * 100.0,
+                        cfg.y + delta.y / size.height * 100.0,
+                    )
+                    vm.updateIndicator(cfg.withAll(mapOf("x" to x, "y" to y)), persist = false)
+                },
+                onDragEnd = {
+                    if (dragKey != null) vm.persistNow()
+                    dragKey = null
+                },
+                onDragCancel = {
+                    if (dragKey != null) vm.persistNow()
+                    dragKey = null
+                },
+            )
+        } else Modifier
+
     Column {
         Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
         Box(Modifier.heightIn(max = 420.dp).aspectRatio(vw.toFloat() / vh)) {
@@ -86,27 +139,7 @@ fun PreviewPane(vm: HudViewModel) {
                 },
             )
             val selected = vm.selectedKey
-            Canvas(
-                Modifier.fillMaxSize().pointerInput(selected) {
-                    if (selected == null) return@pointerInput
-                    detectDragGestures(
-                        onDragEnd = { vm.persistNow() },
-                        onDrag = { change, drag ->
-                            change.consume()
-                            val cfg = vm.layout.indicators[selected] ?: return@detectDragGestures
-                            vm.updateIndicator(
-                                cfg.withAll(
-                                    mapOf(
-                                        "x" to (cfg.x + drag.x / size.width * 100.0).coerceIn(0.0, 100.0),
-                                        "y" to (cfg.y + drag.y / size.height * 100.0).coerceIn(0.0, 100.0),
-                                    ),
-                                ),
-                                persist = false,
-                            )
-                        },
-                    )
-                },
-            ) {
+            Canvas(Modifier.fillMaxSize().then(editGestures)) {
                 if (tilesVersion < 0) return@Canvas // reading it redraws when map tiles arrive
                 val layout = vm.layout
                 drawIntoCanvas { c ->
@@ -117,10 +150,23 @@ fun PreviewPane(vm: HudViewModel) {
                     vm.previewCompositor.render(hud, vw, vh, layout, frame, vm.tiles)
                     nc.restore()
                 }
-                // Marker of the indicator being edited (drag to move it).
-                selected?.let { layout.indicators[it] }?.let { cfg ->
-                    val p = Offset((cfg.x / 100.0 * size.width).toFloat(), (cfg.y / 100.0 * size.height).toFloat())
-                    drawCircle(Color(0xFF159FA5), radius = 14f, center = p, style = Stroke(width = 3f))
+                // Draw selection bounds and a handle at the true Windows widget
+                // anchor. For topleft maps, x/y are NOT their centre.
+                if (editMode) selected?.let { layout.indicators[it] }?.let { cfg ->
+                    val rect = IndicatorPlacement.touchBounds(cfg, vw, vh)
+                    val sx = size.width / vw
+                    val sy = size.height / vh
+                    val l = rect.left * sx
+                    val t = rect.top * sy
+                    val r = rect.right * sx
+                    val b = rect.bottom * sy
+                    drawRect(
+                        Color(0xFF159FA5), topLeft = Offset(l, t),
+                        size = Size((r - l).coerceAtLeast(1f), (b - t).coerceAtLeast(1f)),
+                        style = Stroke(width = 2f),
+                    )
+                    val p = Offset(rect.centerX * sx, rect.centerY * sy)
+                    drawCircle(Color(0xFF159FA5), radius = 13f, center = p, style = Stroke(width = 3f))
                     drawCircle(Color(0xFF159FA5), radius = 3f, center = p)
                 }
             }
