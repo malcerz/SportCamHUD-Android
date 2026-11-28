@@ -77,10 +77,13 @@ object MapRenderer {
         val ds = frame?.dataset ?: return
         if (ds.track.size < 2) return
         val c = ctx.canvas
-        val size = ctx.s(cfg.double("size", 18.0), ctx.width)
+        // Windows map_anchor=topleft positions the MAP'S TOP-LEFT, not its centre.
+        // Resolve legacy map geometries in the same way as the Windows compositor.
+        val rect = IndicatorPlacement.mapBounds(cfg, ctx.width, ctx.height)
+        val size = rect.width
         val half = size / 2
-        val cx = ctx.px(cfg)
-        val cy = ctx.py(cfg)
+        val cx = rect.centerX
+        val cy = rect.centerY
         val z = cfg.int("zoom", 16).coerceIn(1, maxZoom(cfg.string("map_style", "light_all")))
         val ts = max(0.5f, ctx.scale1080)
         val style = cfg.string("map_style", "light_all")
