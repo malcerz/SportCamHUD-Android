@@ -147,7 +147,7 @@ fun ExportTab(vm: HudViewModel) {
         }
 
         if (vm.benchmarkResults.isNotEmpty()) {
-            Text("Wyniki benchmarku — ${vm.selectedCodec.label}, ${outW}×${outH}",
+            Text("Wyniki benchmarku — ${vm.benchmarkProfile}",
                 style = MaterialTheme.typography.titleMedium)
             for (result in vm.benchmarkResults) {
                 Text(result.mode.title, style = MaterialTheme.typography.titleSmall)
