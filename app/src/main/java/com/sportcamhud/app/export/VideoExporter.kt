@@ -52,6 +52,23 @@ data class ExportStats(
 
 class ExportFailed(message: String) : Exception(message)
 
+/** Each benchmark mode uses the SAME video input, resolution, encoder and clip. */
+enum class BenchmarkMode(val title: String) {
+    CODEC_ONLY("1. Kodek bez HUD"),
+    EMPTY_OVERLAY("2. Pusta nakładka GL"),
+    FULL_OVERLAY("3. Pełny HUD"),
+}
+
+data class BenchmarkResult(
+    val mode: BenchmarkMode,
+    val frames: Long,
+    val elapsedMs: Long,
+    val fps: Double,
+    val valid: Boolean,
+    val detail: String,
+)
+
+
 /**
  * Renders the HUD into the video with Media3 Transformer (replaces the FFmpeg pipeline
  * of the Windows app). Audio is passed through; video is re-encoded with the overlay.
@@ -61,6 +78,12 @@ class VideoExporter(private val context: Context) {
 
     /** Output size and HDR handling for one render attempt. */
     data class Plan(val width: Int, val height: Int, val hdrMode: Int, val label: String)
+
+    private data class RenderRun(
+        val result: ExportResult,
+        val elapsedMs: Long,
+        val hudFrames: Long,
+    )
 
     /** What the exporter needs to know about the source video track. */
     data class SourceInfo(val mime: String?, val hdr: Boolean, val profile: Int?, val describe: String)
@@ -132,9 +155,10 @@ class VideoExporter(private val context: Context) {
         input: Uri,
         clipStartMs: Long,
         clipEndMs: Long?,
-        overlayFactory: (onFrame: () -> Unit) -> HudOverlay,
+        overlayFactory: (mode: BenchmarkMode, onFrame: () -> Unit) -> HudOverlay,
         outputName: String,
         plans: List<Plan>,
+        codec: VideoCodec,
         log: (String) -> Unit,
         onProgress: (Int) -> Unit,
         onStats: (ExportStats) -> Unit,
@@ -143,13 +167,14 @@ class VideoExporter(private val context: Context) {
         val errors = mutableListOf<String>()
         try {
             for ((i, plan) in plans.withIndex()) {
-                log("próba ${i + 1}/${plans.size}: ${plan.label}, wyjście H.264/AVC")
+                log("próba ${i + 1}/${plans.size}: ${plan.label}, wyjście ${codec.label}")
                 onProgress(0)
                 onStats(ExportStats())
                 try {
                     // A failed Transformer may have released the previous overlay's GL texture.
                     // Give every attempt its own bitmap, compositor and GL lifetime.
-                    render(input, clipStartMs, clipEndMs, overlayFactory, plan, out, log, onProgress, onStats)
+                    render(input, clipStartMs, clipEndMs, overlayFactory, plan, codec,
+                        BenchmarkMode.FULL_OVERLAY, benchmark = false, out, log, onProgress, onStats)
                     log("render OK: ${plan.label}")
                     errors.clear()
                     break
@@ -167,35 +192,85 @@ class VideoExporter(private val context: Context) {
         }
     }
 
+    /**
+     * Run exactly one bench stage without writing anything to the gallery. The temp MP4
+     * is always removed, even after cancellation. No 720p retry or codec substitution:
+     * all three stages must measure the same conditions.
+     */
+    suspend fun benchmarkStep(
+        input: Uri,
+        clipStartMs: Long,
+        clipEndMs: Long,
+        overlayFactory: (mode: BenchmarkMode, onFrame: () -> Unit) -> HudOverlay,
+        plan: Plan,
+        codec: VideoCodec,
+        mode: BenchmarkMode,
+        log: (String) -> Unit,
+        onProgress: (Int) -> Unit,
+        onStats: (ExportStats) -> Unit,
+    ): BenchmarkResult {
+        val temp = File(context.cacheDir, "bench_${SystemClock.elapsedRealtimeNanos()}_${mode.name}.mp4")
+        return try {
+            val run = render(input, clipStartMs, clipEndMs, overlayFactory, plan, codec,
+                mode, benchmark = true, temp, log, onProgress, onStats)
+            val actualCodec = run.result.videoMimeType ?: "brak wideo"
+            val encoded = run.result.videoConversionProcess == ExportResult.CONVERSION_PROCESS_TRANSCODED
+            val frames = run.result.videoFrameCount.toLong().takeIf { it > 0L } ?: run.hudFrames
+            val valid = encoded && actualCodec.equals(codec.mime, ignoreCase = true) && frames > 0L
+            val detail = when {
+                !encoded -> "Strumień nie był ponownie kodowany (transmux). Test FPS niemiarodajny."
+                !actualCodec.equals(codec.mime, ignoreCase = true) ->
+                    "Zmiana kodeka przez Media3: wybrano ${codec.mime}, otrzymano $actualCodec"
+                frames <= 0 -> "Brak klatek w wyniku Media3."
+                else -> "Kodek: $actualCodec (${run.result.videoEncoderName ?: "nazwa nieznana"})"
+            }
+            BenchmarkResult(mode, frames, run.elapsedMs,
+                if (valid) frames * 1000.0 / run.elapsedMs.coerceAtLeast(1L) else 0.0,
+                valid, detail)
+        } finally {
+            temp.delete()
+        }
+    }
+
     private suspend fun render(
         input: Uri,
         clipStartMs: Long,
         clipEndMs: Long?,
-        overlayFactory: (onFrame: () -> Unit) -> HudOverlay,
+        overlayFactory: (mode: BenchmarkMode, onFrame: () -> Unit) -> HudOverlay,
         plan: Plan,
+        codec: VideoCodec,
+        mode: BenchmarkMode,
+        benchmark: Boolean,
         out: File,
         log: (String) -> Unit,
         onProgress: (Int) -> Unit,
         onStats: (ExportStats) -> Unit,
-    ) {
-        // Count actual overlay invocations, not guessed source FPS or the progress percentage.
+    ): RenderRun {
         val frameCount = AtomicLong(0L)
-        val overlay = overlayFactory { frameCount.incrementAndGet() }
+        val overlay = if (mode == BenchmarkMode.CODEC_ONLY) null
+            else overlayFactory(mode) { frameCount.incrementAndGet() }
         val clipping = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(clipStartMs).apply {
             if (clipEndMs != null) setEndPositionMs(clipEndMs)
         }.build()
         val item = MediaItem.Builder().setUri(input).setClippingConfiguration(clipping).build()
-        val videoEffects = listOf<Effect>(
-            Presentation.createForWidthAndHeight(plan.width, plan.height, Presentation.LAYOUT_SCALE_TO_FIT),
-            OverlayEffect(listOf<TextureOverlay>(overlay)),
+        // Keep Presentation in ALL 3 modes to run the same decode, GL scale and
+        // encoder; omit only the BitmapOverlay in the baseline. Verify transcode
+        // via ExportResult so a fast remux is never mistaken for encode speed.
+        val videoEffects = mutableListOf<Effect>(
+            Presentation.createForWidthAndHeight(
+                plan.width, plan.height, Presentation.LAYOUT_SCALE_TO_FIT),
         )
-        val edited = EditedMediaItem.Builder(item).setEffects(Effects(listOf(), videoEffects)).build()
+        if (overlay != null) videoEffects += OverlayEffect(listOf<TextureOverlay>(overlay))
+        val edited = EditedMediaItem.Builder(item)
+            .setRemoveAudio(benchmark)
+            .setEffects(Effects(listOf(), videoEffects))
+            .build()
         @Suppress("DEPRECATION")
         val composition = Composition.Builder(EditedMediaItemSequence(listOf(edited)))
             .setHdrMode(plan.hdrMode)
             .build()
 
-        coroutineScope {
+        return coroutineScope {
             var transformer: Transformer? = null
             val startedAtNs = SystemClock.elapsedRealtimeNanos()
             val poller = launch {
@@ -244,15 +319,14 @@ class VideoExporter(private val context: Context) {
                 }
             }
             try {
-                suspendCancellableCoroutine<Unit> { cont ->
+                val result = suspendCancellableCoroutine<ExportResult> { cont ->
                     val t = Transformer.Builder(context)
-                        // The source may be GoPro HEVC Main10, but the phone's HEVC encoder
-                        // may not support editing/overlays. AVC is the compatible SDR output.
-                        // Audio is still passed through by Transformer when possible.
-                        .setVideoMimeType(MimeTypes.VIDEO_H264)
+                        // The requested codec is explicit. Media3 may fallback for encoder
+                        // constraints; check the resulting MIME before accepting the export.
+                        .setVideoMimeType(codec.mime)
                         .addListener(object : Transformer.Listener {
                             override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                                if (cont.isActive) cont.resume(Unit)
+                                if (cont.isActive) cont.resume(exportResult)
                             }
 
                             override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
@@ -277,6 +351,21 @@ class VideoExporter(private val context: Context) {
                     log("Transformer.start")
                     t.start(composition, out.absolutePath)
                 }
+                val elapsedMs = ((SystemClock.elapsedRealtimeNanos() - startedAtNs) / 1_000_000L).coerceAtLeast(1L)
+                val frames = result.videoFrameCount.toLong().takeIf { it > 0L } ?: frameCount.get()
+                onProgress(100)
+                onStats(ExportStats(
+                    fps = frames * 1000.0 / elapsedMs,
+                    averageFps = frames * 1000.0 / elapsedMs,
+                    frames = frames,
+                    elapsedSeconds = elapsedMs / 1000L,
+                    remainingSeconds = 0L,
+                    progressPercent = 100,
+                ))
+                if (!result.videoMimeType.equals(codec.mime, ignoreCase = true)) {
+                    throw ExportFailed("Żądano ${codec.label}, ale wyjście to ${result.videoMimeType}. Nie zmieniamy kodeka bez zgody.")
+                }
+                RenderRun(result, elapsedMs, frameCount.get())
             } finally {
                 poller.cancel()
             }

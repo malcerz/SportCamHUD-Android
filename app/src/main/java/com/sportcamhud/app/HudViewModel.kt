@@ -17,6 +17,10 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.sportcamhud.app.export.HudOverlay
 import com.sportcamhud.app.export.ExportStats
 import com.sportcamhud.app.export.VideoExporter
+import com.sportcamhud.app.export.VideoCodec
+import com.sportcamhud.app.export.DeviceVideoCodecs
+import com.sportcamhud.app.export.BenchmarkMode
+import com.sportcamhud.app.export.BenchmarkResult
 import com.sportcamhud.app.garmin.KeystoreTokenStore
 import com.sportcamhud.app.render.AndroidHudCanvas
 import com.sportcamhud.app.render.TileCache
@@ -87,6 +91,11 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     var exporting by mutableStateOf(false); private set
     var exportProgress by mutableIntStateOf(0); private set
     var exportStats by mutableStateOf(ExportStats()); private set
+    var selectedCodec by mutableStateOf(VideoCodec.fromPreference(prefs.getString("export_video_codec", null))); private set
+    var benchmarkRunning by mutableStateOf(false); private set
+    var benchmarkPhase by mutableStateOf(""); private set
+    var benchmarkProfile by mutableStateOf(""); private set
+    var benchmarkResults by mutableStateOf<List<BenchmarkResult>>(emptyList()); private set
     var exportResult by mutableStateOf<Uri?>(null); private set
     var clipStartMs by mutableLongStateOf(0L)
     /** Shorter side of the rendered film in px; 0 keeps the original size. */
@@ -417,6 +426,12 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- export ---------------------------------------------------------------
+    fun changeVideoCodec(codec: VideoCodec) {
+        if (exporting) return
+        selectedCodec = codec
+        prefs.edit().putString("export_video_codec", codec.name).apply()
+    }
+
     fun changeExportShortSide(px: Int) {
         exportShortSide = px
         prefs.edit().putInt("export_short_side", px).apply()
@@ -431,9 +446,35 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
         return even(v.displayWidth * f) to even(v.displayHeight * f)
     }
 
+    /** A fresh bitmap and compositor for each Transformer attempt or benchmark stage. */
+    private fun overlayFactory(
+        clipStart: Long, exportLayout: HudLayout, tl: TelemetryTimeline?,
+    ): (mode: BenchmarkMode, onFrame: () -> Unit) -> HudOverlay = { mode, onFrame ->
+        val compositor = HudCompositor()
+        var hudCanvas: AndroidHudCanvas? = null
+        HudOverlay(log = CrashLog::step, onFrame = onFrame) { canvas, w, h, ptsUs ->
+            // Empty overlay still allocates/clears/uploads the identical bitmap
+            // and runs OverlayEffect; only the indicators are omitted.
+            if (mode == BenchmarkMode.FULL_OVERLAY) {
+                val c = hudCanvas?.also { it.reset(canvas) }
+                    ?: AndroidHudCanvas(canvas, w, h).also { hudCanvas = it }
+                val posMs = clipStart + ptsUs / 1000
+                compositor.render(c, w, h, exportLayout, tl?.frameAt(posMs), tiles)
+            }
+        }
+    }
+
     fun startExport() {
         val v = video ?: return
         if (exporting) return
+        val (requestedW, requestedH) = exportSize(v)
+        val codec = selectedCodec
+        try {
+            DeviceVideoCodecs.requireSupported(codec, requestedW, requestedH)
+        } catch (e: IllegalArgumentException) {
+            status = e.message
+            return
+        }
         exporting = true
         exportProgress = 0
         exportStats = ExportStats()
@@ -448,7 +489,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
         val clipEnd = clipEndMs.takeIf { it in (clipStart + 1) until v.durationMs }
         val (outW, outH) = exportSize(v)
         CrashLog.exportStarted()
-        CrashLog.step("${v.name}: ${v.width}x${v.height} rot=${v.rotation}, ${v.durationMs} ms, ${v.sizeBytes / 1048576} MB; fragment $clipStart–${clipEnd ?: v.durationMs} ms; wynik ${outW}x$outH")
+        CrashLog.step("${v.name}: ${v.width}x${v.height} rot=${v.rotation}, ${v.durationMs} ms, ${v.sizeBytes / 1048576} MB; fragment $clipStart–${clipEnd ?: v.durationMs} ms; wynik ${outW}x$outH; kodek ${codec.label}")
         exportJob = viewModelScope.launch {
             try {
                 // Download every map tile the route needs before rendering starts.
@@ -474,22 +515,10 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
                 val exporter = VideoExporter(ctx)
                 val source = withContext(Dispatchers.IO) { exporter.probe(v.uri) }
                 CrashLog.step("źródło: ${source.describe}, HDR=${source.hdr}")
-                // A failed export releases Media3's GL resources. Never reuse an overlay
-                // or its drawing state in the retry at another resolution/HDR mode.
-                val overlayFactory: (onFrame: () -> Unit) -> HudOverlay = { onFrame ->
-                    val compositor = HudCompositor()
-                    var hudCanvas: AndroidHudCanvas? = null
-                    HudOverlay(log = CrashLog::step, onFrame = onFrame) { canvas, w, h, ptsUs ->
-                        val c = hudCanvas?.also { it.reset(canvas) }
-                            ?: AndroidHudCanvas(canvas, w, h).also { hudCanvas = it }
-                        // Clipped exports restart presentation time at 0: add the clip start back.
-                        val posMs = clipStart + ptsUs / 1000
-                        compositor.render(c, w, h, exportLayout, tl?.frameAt(posMs), tiles)
-                    }
-                }
+                val overlays = overlayFactory(clipStart, exportLayout, tl)
                 val plans = exporter.plans(source, outW, outH)
                 val uri = exporter.export(
-                    v.uri, clipStart, clipEnd, overlayFactory, v.name, plans,
+                    v.uri, clipStart, clipEnd, overlays, v.name, plans, codec,
                     CrashLog::step, { exportProgress = it }, { exportStats = it },
                 )
                 exportResult = uri
@@ -502,6 +531,87 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
                 status = e.message ?: "Renderowanie nie powiodło się: $e"
                 CrashLog.exportFinished("błąd: $e")
             } finally {
+                exporting = false
+                player.prepare()
+                player.seekTo(resumeAt)
+            }
+        }
+    }
+
+    /**
+     * Three identical 12-second video-only clips, sequentially, with one codec
+     * and resolution. No temp MP4 is ever sent to the gallery.
+     */
+    fun startBenchmark() {
+        val v = video ?: return
+        if (exporting) return
+        val codec = selectedCodec
+        val (outW, outH) = exportSize(v)
+        try {
+            DeviceVideoCodecs.requireSupported(codec, outW, outH)
+        } catch (e: IllegalArgumentException) {
+            status = e.message
+            return
+        }
+        val start = clipStartMs.coerceIn(0L, v.durationMs)
+        val selectedEnd = clipEndMs.takeIf { it > start } ?: v.durationMs
+        val end = minOf(v.durationMs, selectedEnd, start + 12_000L)
+        if (end - start < 2_000L) {
+            status = "Benchmark wymaga co najmniej 2 sekund nagrania od początku wybranego fragmentu."
+            return
+        }
+        exporting = true
+        benchmarkRunning = true
+        benchmarkResults = emptyList()
+        benchmarkProfile = "${codec.label}, ${outW}×$outH, fragment ${end - start} ms"
+        benchmarkPhase = "Przygotowanie…"
+        exportResult = null // Benchmark must not masquerade as an ordinary exported movie.
+        exportStats = ExportStats()
+        exportProgress = 0
+        player.pause()
+        val resumeAt = player.currentPosition
+        player.stop()
+        val snapshot = layout
+        val tl = timeline
+        CrashLog.exportStarted()
+        CrashLog.step("Benchmark: 3 x ${end - start} ms, ${outW}x$outH, ${codec.label}")
+        exportJob = viewModelScope.launch {
+            try {
+                val exporter = VideoExporter(ctx)
+                val src = withContext(Dispatchers.IO) { exporter.probe(v.uri) }
+                val plan = exporter.plans(src, outW, outH).first()
+                val overlays = overlayFactory(start, snapshot, tl)
+                for ((i, mode) in BenchmarkMode.values().withIndex()) {
+                    benchmarkPhase = "${i + 1}/3 — ${mode.title}"
+                    exportProgress = 0
+                    exportStats = ExportStats()
+                    status = "Benchmark: ${mode.title}"
+                    val result = try {
+                        exporter.benchmarkStep(
+                            v.uri, start, end, overlays, plan, codec, mode,
+                            CrashLog::step,
+                            { exportProgress = it }, { exportStats = it },
+                        )
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        BenchmarkResult(mode, 0L, 0L, 0.0, false,
+                            "Błąd: ${e.message ?: e.javaClass.simpleName}")
+                    }
+                    benchmarkResults = benchmarkResults + result
+                    CrashLog.step("${mode.title}: ${if (result.valid) "%.1f FPS".format(result.fps) else result.detail}; ${result.elapsedMs}ms")
+                }
+                status = "Benchmark ukończony. Wyniki trzech pomiarów poniżej."
+                CrashLog.exportFinished("benchmark: zakończony")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                status = "Benchmark przerwany. Zachowano zakończone pomiary."
+                CrashLog.exportFinished("benchmark: przerwany")
+            } catch (e: Throwable) {
+                status = "Błąd benchmarku: ${e.message ?: e.javaClass.simpleName}"
+                CrashLog.exportFinished("benchmark: błąd ${e.javaClass.simpleName}")
+            } finally {
+                benchmarkRunning = false
+                benchmarkPhase = ""
                 exporting = false
                 player.prepare()
                 player.seekTo(resumeAt)
