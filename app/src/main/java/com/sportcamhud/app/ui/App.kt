@@ -1,6 +1,8 @@
 package com.sportcamhud.app.ui
 
 import android.content.Intent
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
@@ -57,6 +59,7 @@ fun SportCamHudApp(vm: HudViewModel) {
     MaterialTheme(colorScheme = HudColors) {
         var tab by rememberSaveable { mutableIntStateOf(0) }
         var showGarminLogin by rememberSaveable { mutableStateOf(false) }
+        var fullscreenEdit by rememberSaveable { mutableStateOf(false) }
 
         if (showGarminLogin) {
             Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -64,6 +67,18 @@ fun SportCamHudApp(vm: HudViewModel) {
                     showGarminLogin = false
                     vm.onGarminLoginFinished(ok, msg)
                 }
+            }
+            return@MaterialTheme
+        }
+
+        if (fullscreenEdit) {
+            BackHandler { fullscreenEdit = false }
+            Box(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding()) {
+                PreviewPane(vm, editMode = true, fullscreen = true)
+                TextButton(
+                    onClick = { fullscreenEdit = false },
+                    modifier = Modifier.align(Alignment.TopEnd),
+                ) { Text("Zakończ edycję", color = Color.White) }
             }
             return@MaterialTheme
         }
@@ -84,14 +99,14 @@ fun SportCamHudApp(vm: HudViewModel) {
             },
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
-                PreviewPane(vm)
+                PreviewPane(vm, editMode = tab == 1, onFullScreenEdit = { fullscreenEdit = true })
                 if (vm.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 StatusBar(vm)
                 HorizontalDivider()
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (tab) {
                         0 -> ProjectTab(vm)
-                        1 -> IndicatorsTab(vm)
+                        1 -> IndicatorsTab(vm, onFullScreenEdit = { fullscreenEdit = true })
                         2 -> ExportTab(vm)
                         else -> SettingsTab(vm, onConnectGarmin = { showGarminLogin = true })
                     }

@@ -242,8 +242,13 @@ object BarRenderer {
         if (cfg.bool("show_range_labels", true)) {
             val rs = TextStyle(fs * 0.82f, dimText, stroke, Colors.argb(230, 0, 0, 0))
             val dec = rangeDecimals(cfg, lo, hi)
-            c.text("${fmt(hi, dec)}$unit", cx - majorLen - 4 * scale, top, rs, HAlign.RIGHT, VAlign.MIDDLE)
-            c.text("${fmt(lo, dec)}$unit", cx - majorLen - 4 * scale, bottom, rs, HAlign.RIGHT, VAlign.MIDDLE)
+            // On the left edge, place labels inside the picture instead of
+            // drawing them into the cropped/letterboxed region.
+            val leftEdge = cx < ctx.width * 0.12f
+            val labelX = if (leftEdge) cx + majorLen + 4 * scale else cx - majorLen - 4 * scale
+            val align = if (leftEdge) HAlign.LEFT else HAlign.RIGHT
+            c.text("${fmt(hi, dec)}$unit", labelX, top, rs, align, VAlign.MIDDLE)
+            c.text("${fmt(lo, dec)}$unit", labelX, bottom, rs, align, VAlign.MIDDLE)
         }
         if (value != null) {
             val frac = if (hi != lo) ((value - lo) / (hi - lo)).coerceIn(0.0, 1.0).toFloat() else 0f
@@ -252,7 +257,12 @@ object BarRenderer {
             c.fillCircle(cx, my, markerR + 1.5f * scale, Colors.argb(255, 216, 216, 216))
             c.fillCircle(cx, my, markerR, markerColor)
             val txt = formatted ?: "${fmt(value, max(0, cfg.int("decimals", 1)))} $unit".trim()
-            c.text(txt, cx + markerR + 8 * scale, my, TextStyle(fs, textColor, stroke, Colors.argb(230, 0, 0, 0)), HAlign.LEFT, VAlign.MIDDLE)
+            // Presets place the temperature ruler at x≈96%: the current value
+            // must appear LEFT of that ruler to remain inside the video frame.
+            val rightEdge = cx > ctx.width * 0.82f
+            val valueX = if (rightEdge) cx - markerR - 8 * scale else cx + markerR + 8 * scale
+            val align = if (rightEdge) HAlign.RIGHT else HAlign.LEFT
+            c.text(txt, valueX, my, TextStyle(fs, textColor, stroke, Colors.argb(230, 0, 0, 0)), align, VAlign.MIDDLE)
         }
     }
 
