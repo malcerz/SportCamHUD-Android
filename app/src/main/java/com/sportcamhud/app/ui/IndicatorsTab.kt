@@ -175,7 +175,7 @@ private fun IndicatorEditor(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 LabeledSwitch("Włączony", cfg.enabled) { onChange(cfg.with("enabled", it)) }
                 TextProp("Etykieta", cfg.label) { onChange(cfg.with("label", it)) }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     NumberProp("Pozycja X (%)", cfg.x) { onChange(cfg.with("x", it.coerceIn(0.0, 100.0))) }
                     NumberProp("Pozycja Y (%)", cfg.y) { onChange(cfg.with("y", it.coerceIn(0.0, 100.0))) }
                 }
