@@ -58,6 +58,7 @@ fun ProjectTab(vm: HudViewModel) {
                         "Data nagrania: " + (v.creationTime?.let { DATE_TIME.format(Instant.ofEpochMilli(it).atOffset(ZoneOffset.UTC)) }
                             ?: "brak w pliku"),
                     )
+                    Text(vm.cameraStatus, style = MaterialTheme.typography.bodySmall)
                     vm.camera?.let { cam ->
                         val parts = buildList {
                             if (cam.hasGps) add("GPS")
