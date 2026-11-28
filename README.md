@@ -52,6 +52,10 @@ Wymagane: JDK 17+, Android SDK 36.
   pozycję. Puszczenie palca zapisuje współrzędne w JSON. Przycisk **Właściwości**
   otwiera dodatkowe opcje i pola X/Y w procentach. Wybranie pozycji z listy nie
   blokuje już podglądu oknem dialogowym.
+- **Pełny ekran edycji**: na ekranie Wskaźniki kliknij `⛶ Pełny ekran edycji`
+  lub `⛶ Edytuj` na podglądzie. W poziomie podgląd dopasowuje się do wysokości,
+  więc wskaźniki można chwytać bez zasłaniających paneli. `Zakończ edycję`
+  lub systemowy Wstecz wraca do listy i właściwości.
 - Tekst pionowych linijek przy krawędziach jest kierowany do wnętrza kadru.
   Zaawansowane style Windows nie są jeszcze w pełni identyczne na Androidzie.
 
