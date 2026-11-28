@@ -84,7 +84,7 @@ fun SportCamHudApp(vm: HudViewModel) {
             },
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
-                PreviewPane(vm)
+                PreviewPane(vm, editMode = tab == 1)
                 if (vm.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 StatusBar(vm)
                 HorizontalDivider()
