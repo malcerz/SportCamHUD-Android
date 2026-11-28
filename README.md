@@ -41,6 +41,20 @@ Wymagane: JDK 17+, Android SDK 36.
   Udostępnianie działa z systemowej galerii.
   Aplikację można też otworzyć przez „Udostępnij” z galerii.
 
+## Korekta położenia HUD (Android 1.2.1)
+
+- `track_map` z Windows `def_layout.json` wykorzystuje `map_anchor: "topleft"`:
+  współrzędne `x` i `y` oznaczają lewy górny róg mapy. Poprzedni Android
+  błędnie traktował je jako środek, przez co mapa była obcinana przez krawędź filmu.
+  Starsze układy bez tej flagi przeliczane są kompatybilnie z Windows.
+- W zakładce **Wskaźniki** dotknij element na podglądzie lub wybierz go z listy.
+  Zaznaczenie pokazuje obrys i uchwyt; przeciągnij palcem na filmie, by zmienić
+  pozycję. Puszczenie palca zapisuje współrzędne w JSON. Przycisk **Właściwości**
+  otwiera dodatkowe opcje i pola X/Y w procentach. Wybranie pozycji z listy nie
+  blokuje już podglądu oknem dialogowym.
+- Tekst pionowych linijek przy krawędziach jest kierowany do wnętrza kadru.
+  Zaawansowane style Windows nie są jeszcze w pełni identyczne na Androidzie.
+
 ## Wspólny preset z Windows i GPMF
 
 - Android zawiera `app/src/main/assets/def_layout.json`, skopiowany z gałęzi `main`
