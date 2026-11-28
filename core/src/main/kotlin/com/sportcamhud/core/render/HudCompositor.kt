@@ -39,7 +39,8 @@ class HudCompositor(private val caches: RenderCaches = RenderCaches()) {
 
     fun bind(cfg: IndicatorConfig, frame: FrameData?): Bound? {
         val ds = frame?.dataset
-        val field = IndicatorRegistry.fieldFor(cfg)
+        val candidates = IndicatorRegistry.fieldCandidates(cfg)
+        val field = candidates.firstOrNull { frame?.has(it) == true } ?: candidates.firstOrNull()
         if (field != null) {
             // Hide indicators whose stream is missing (e.g. ISO without a GoPro video).
             if (frame == null || !frame.has(field)) {
