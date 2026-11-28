@@ -77,24 +77,46 @@ object IndicatorRegistry {
         "lean_indicator" to "lean",
     )
 
-    /** Windows FIT indicator keys look like `fit_<field>_text`; map them to dataset keys. */
-    fun fieldFor(cfg: IndicatorConfig): String? {
-        cfg.string("field", "").takeIf { it.isNotBlank() }?.let { return it }
-        BUILTIN_FIELDS[cfg.key]?.let { return it }
-        val k = cfg.key
-        if (k.startsWith("fit_")) {
-            val base = k.removeSuffix("_text").removeSuffix("_visual").removePrefix("fit_")
-            return when (base) {
-                "speed", "enhanced_speed" -> Fields.SPEED
-                "distance" -> Fields.DISTANCE
-                "altitude", "enhanced_altitude" -> Fields.ALT
-                "heart_rate" -> Fields.HEART_RATE
-                "cadence" -> Fields.CADENCE
-                "power" -> Fields.POWER
-                "temperature" -> Fields.TEMPERATURE
-                else -> "fit_$base"
-            }
-        }
-        return null
+    /** Windows field aliases and dynamic Garmin FIT SDK field names. */
+    private fun canonical(name: String): String? = when (name.lowercase()) {
+        "speed", "enhanced_speed" -> Fields.SPEED
+        "distance", "dist" -> Fields.DISTANCE
+        "alt", "altitude", "enhanced_altitude" -> Fields.ALT
+        "heart_rate", "hr" -> Fields.HEART_RATE
+        "cadence", "cad" -> Fields.CADENCE
+        "power" -> Fields.POWER
+        "temperature", "atemp" -> Fields.TEMPERATURE
+        "heading", "course" -> Fields.HEADING
+        "slope", "grade" -> Fields.SLOPE
+        "battery", "garmin_battery_percent" -> Fields.BATTERY
+        else -> null
     }
+
+    /**
+     * A Windows preset can bind by explicit "field" (curVpower), by built-in key
+     * (speed_text), or by dynamic fit_<name>_text key. Preserve the source JSON;
+     * select the first candidate present in the loaded telemetry instead of
+     * overwriting Windows naming conventions.
+     */
+    fun fieldCandidates(cfg: IndicatorConfig): List<String> {
+        val explicit = cfg.string("field", "").trim()
+        val builtIn = BUILTIN_FIELDS[cfg.key]
+        val dynamic = cfg.key.takeIf { it.startsWith("fit_") }
+            ?.removePrefix("fit_")?.removeSuffix("_text")?.removeSuffix("_visual")
+        val bases = listOfNotNull(explicit.takeIf { it.isNotBlank() }, builtIn, dynamic)
+        return buildList {
+            for (base in bases) {
+                val key = base.lowercase().replace(Regex("[^a-z0-9_]+"), "_").trim('_')
+                canonical(base)?.let { add(it) }
+                add(base)
+                if (key.isNotBlank()) {
+                    add(key)
+                    add("fit_$key")
+                    add("fit_dev_$key")
+                }
+            }
+        }.distinct()
+    }
+
+    fun fieldFor(cfg: IndicatorConfig): String? = fieldCandidates(cfg).firstOrNull()
 }
