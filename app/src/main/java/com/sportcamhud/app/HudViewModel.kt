@@ -94,6 +94,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
     var selectedCodec by mutableStateOf(VideoCodec.fromPreference(prefs.getString("export_video_codec", null))); private set
     var benchmarkRunning by mutableStateOf(false); private set
     var benchmarkPhase by mutableStateOf(""); private set
+    var benchmarkProfile by mutableStateOf(""); private set
     var benchmarkResults by mutableStateOf<List<BenchmarkResult>>(emptyList()); private set
     var exportResult by mutableStateOf<Uri?>(null); private set
     var clipStartMs by mutableLongStateOf(0L)
@@ -562,6 +563,7 @@ class HudViewModel(app: Application) : AndroidViewModel(app) {
         exporting = true
         benchmarkRunning = true
         benchmarkResults = emptyList()
+        benchmarkProfile = "${codec.label}, ${outW}×$outH, fragment ${end - start} ms"
         benchmarkPhase = "Przygotowanie…"
         exportStats = ExportStats()
         exportProgress = 0
