@@ -96,7 +96,7 @@ fun IndicatorsTab(vm: HudViewModel) {
                     for (f in fields) {
                         DropdownMenuItem(
                             text = { Text(vm.fieldLabel(f)) },
-                            onClick = { addMenu = false; vm.addIndicator(f); editing = vm.selectedKey },
+                            onClick = { addMenu = false; vm.addIndicator(f); editing = null },
                         )
                     }
                 }
@@ -106,10 +106,24 @@ fun IndicatorsTab(vm: HudViewModel) {
             TextButton(onClick = vm::resetLayout) { Text("Domyślne") }
         }
         Text(
-            "Stuknij wskaźnik, aby go edytować. Zaznaczony wskaźnik możesz przeciągać palcem na podglądzie.",
+            "Stuknij wskaźnik na filmie lub wybierz go z listy, a potem przeciągnij palcem na podglądzie. " +
+                "Ustawienia otwieraj osobno przyciskiem Właściwości.",
             Modifier.padding(horizontal = 12.dp),
             style = MaterialTheme.typography.bodySmall,
         )
+        vm.selectedKey?.let { key ->
+            vm.layout.indicators[key]?.let { selected ->
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Zaznaczono: ${indicatorName(selected)}",
+                        Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { editing = key }) { Text("Właściwości") }
+                    TextButton(onClick = { vm.selectedKey = null; editing = null }) { Text("Odznacz") }
+                }
+            }
+        }
         LazyColumn(Modifier.fillMaxSize()) {
             items(vm.layout.indicators.values.toList(), key = { it.key }) { cfg ->
                 val selected = vm.selectedKey == cfg.key
@@ -117,8 +131,9 @@ fun IndicatorsTab(vm: HudViewModel) {
                     Modifier.fillMaxWidth()
                         .background(if (selected) Color(0x33159FA5) else Color.Transparent)
                         .clickable {
+                            // Selecting a widget must not block the preview with a dialog.
                             vm.selectedKey = cfg.key
-                            editing = cfg.key
+                            editing = null
                         }
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -160,8 +175,10 @@ private fun IndicatorEditor(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 LabeledSwitch("Włączony", cfg.enabled) { onChange(cfg.with("enabled", it)) }
                 TextProp("Etykieta", cfg.label) { onChange(cfg.with("label", it)) }
-                SliderProp("Pozycja X", cfg.x, 0.0, 100.0) { onChange(cfg.with("x", it)) }
-                SliderProp("Pozycja Y", cfg.y, 0.0, 100.0) { onChange(cfg.with("y", it)) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    NumberProp("Pozycja X (%)", cfg.x) { onChange(cfg.with("x", it.coerceIn(0.0, 100.0))) }
+                    NumberProp("Pozycja Y (%)", cfg.y) { onChange(cfg.with("y", it.coerceIn(0.0, 100.0))) }
+                }
 
                 val form = cfg.form
                 if (form != "time_display" && form != "map" && form != "lean") {
